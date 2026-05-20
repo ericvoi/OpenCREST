@@ -1,6 +1,6 @@
 # OpenCREST
 
-OpenCREST is an underwater acoustic hardware-in-the-loop (HIL) simulator. It
+OpenCREST (Open Channel Real-time Emulation Streaming Tool) is an underwater acoustic hardware-in-the-loop (HIL) simulator. It
 captures the analog drive signal from a real modem's transducer over USB,
 applies a simulated acoustic channel (Doppler, multipath, path loss, ambient
 noise) on the host PC, and injects the resulting signal back into the
@@ -118,4 +118,4 @@ both together for the executable.
 
 ## License
 
-See `LICENSE` (TBD).
+See `LICENSE`
