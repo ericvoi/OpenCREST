@@ -1,0 +1,87 @@
+{#- Experiment 2 config (a): propagation delay only.
+
+Baseline reference. No multipath, no Doppler, no noise — the only thing
+the channel does is delay by 500 m / 1500 m·s⁻¹ = 333 ms one-way. Ranging
+error should be limited only by the firmware's CYCCNT resolution and the
+documented ~3–5 m HW+USB+sim bias (project_ranging_bias_first_message.md).
+
+Variables (all optional, injected by Sweep runner):
+  output_directory   (str)  per-cell output dir
+  log_raw_rx         (bool) default false; verify script flips it on
+  modem_a_serial     (str)  default OA-2-1
+  modem_b_serial     (str)  default OA-2-2
+-#}
+name: exp2_ranging_a
+description: >
+  Experiment 2 — config (a): bidirectional two-modem ranging at R=500 m
+  with propagation-delay-only channel. No multipath, Doppler, or noise.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 172.0
+    rvr_db: -200.0
+  T-002:
+    tvr_db: 170.0
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial | default('OA-2-1') }}"
+    transducer_id: "T-001"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial | default('OA-2-2') }}"
+    transducer_id: "T-002"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+
+channels:
+  # A → B
+  - from: modem_a
+    to: modem_b
+    range_m: 500.0
+    # With noise.disable=true the Wenz noise floor doesn't mask the chain.
+    # Physical+boost gain at R=500/fc=31.5 kHz lands at +25.77 dB on this HW
+    # (see "Channel ... → ... AFE_dB" line in simulator stdout); without trim,
+    # modem B's ADC saturates on the request packet and never responds.
+    # -20 dB drops total to ~+6 dB — safely in the linear region.
+    gain_db: -20.0
+    multipath_taps:
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+  # B → A (reciprocal)
+  - from: modem_b
+    to: modem_a
+    range_m: 500.0
+    # With noise.disable=true the Wenz noise floor doesn't mask the chain.
+    # Physical+boost gain at R=500/fc=31.5 kHz lands at +25.77 dB on this HW
+    # (see "Channel ... → ... AFE_dB" line in simulator stdout); without trim,
+    # modem B's ADC saturates on the request packet and never responds.
+    # -20 dB drops total to ~+6 dB — safely in the linear region.
+    gain_db: -20.0
+    multipath_taps:
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+
+noise:
+  disable: true
+
+logging:
+  log_raw_tx: false
+  log_raw_rx: {{ (log_raw_rx | default(false)) | string | lower }}
+  log_processed: false
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: 0

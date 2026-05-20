@@ -1,0 +1,55 @@
+name: loopback_multipath
+description: >
+  Single modem loopback through a shallow-water multipath channel.
+  Three propagation paths: direct, surface-reflected, bottom-reflected.
+  Useful for testing multipath equalisation and ISI handling.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+
+transducers:
+  T-001:
+    tvr_db: 150.0     # plausible mid-band transducer; refine when real data lands
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    clock_offset_ppm: 0.0
+
+channels:
+  - from: modem_a
+    to: modem_a
+    range_m: 300.0           # base propagation delay = 200 ms (range / sound_speed)
+    # Empirical trim — see loopback_simple.yaml. At 300 m / 31.5 kHz,
+    # idx=1, the placeholder T-001 leaves ~+22 dB of chain gain; cancel.
+    # gain_db: -22.0
+    multipath_taps:
+      # Tap delays are EXCESS over the direct path (Phase 2 semantics).
+      # Direct path
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+      # Surface reflection: 5 ms longer, 6 dB weaker, 180° phase flip
+      - delay_s: 0.005
+        gain_db: -6.0
+        phase_deg: 180.0
+      # Bottom reflection: 12 ms longer, 10 dB weaker
+      - delay_s: 0.012
+        gain_db: -10.0
+        phase_deg: 0.0
+
+noise:
+  wenz_sea_state: 4
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav

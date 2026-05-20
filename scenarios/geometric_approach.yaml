@@ -1,0 +1,68 @@
+name: geometric_approach
+description: >
+  Two-modem closing approach with method-of-images multipath. Modem A closes
+  on modem B at 2 m/s from an initial range of 1000 m. Used as the reference
+  scene for the paper's §4.2 (channel-model validation) and §4.4 (JANUS PER
+  vs range) experiments. Taps are recomputed each processing block from the
+  instantaneous range R(t); Doppler emerges naturally from the time-varying
+  direct-path delay rather than from a bulk Farrow ratio.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  # PairBuffer holds an entire message in flight — increase if you push
+  # longer JANUS payloads through this scene.
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 152.0
+    rvr_db: -180.0
+  T-002:
+    tvr_db: 152.0
+    rvr_db: -180.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    velocity_radial_m_s: -2.0       # negative = closing (dR/dt < 0)
+    acceleration_radial_m_s2: 0.0
+
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-002"
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: 1000.0                 # scenario-wide sizing reference
+    mode: geometric
+    initial_range_m: 1000.0         # R_0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 50.0
+      receiver_depth_m: 100.0
+      gamma_surface: -0.9           # near-pressure-release surface
+      gamma_bottom: 0.7             # firm bottom
+      spreading_exponent_k: 1.5     # between cylindrical (1.0) and spherical (2.0)
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 500.0                # PairBuffer is sized for R ∈ [r_min, r_max]
+      r_max_m: 1100.0
+
+noise:
+  wenz_sea_state: 2
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav

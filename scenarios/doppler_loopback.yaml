@@ -1,0 +1,49 @@
+name: doppler_loopback
+description: >
+  Single-modem loopback for hardware verification of Doppler frequency shift.
+  Modem TXes its FSK tones (29 / 30 kHz from cfg_defaults.h); host applies
+  velocity-driven Farrow resampling and re-injects. Direct path only — no
+  multipath — so the post-channel spectrum has clean tones at f * (1 + v/c)
+  for FFT comparison against the pre-channel WAV.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 152.0     # plausible mid-band transducer; refine when real data lands
+    rvr_db: -180.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    clock_offset_ppm: 20.0
+    velocity_radial_m_s: 1.0   # → expected ratio = 1 + 1/1500 = 1.000667
+
+channels:
+  - from: modem_a
+    to: modem_a
+    range_m: 150.0
+    # Empirical trim — see loopback_simple.yaml. ~+30 dB at 150 m / 31.5 kHz.
+    gain_db: -30.0
+    direct_los: true
+    multipath_taps:
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+
+noise:
+  wenz_sea_state: 3
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: false
+  output_directory: "logs"
+  file_format: wav

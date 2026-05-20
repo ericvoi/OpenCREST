@@ -1,0 +1,63 @@
+name: geometric_ref_r1000
+description: >
+  Session B §3 reference capture — stationary geometric scene at R=1000 m,
+  used to obtain a single-message TX waveform (tx.wav) that can serve as a
+  cross-correlation reference template against the moving run.
+  All other parameters mirror geometric_approach.yaml exactly.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 152.0
+    rvr_db: -180.0
+  T-002:
+    tvr_db: 152.0
+    rvr_db: -180.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-002"
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: 1000.0
+    mode: geometric
+    initial_range_m: 1000.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 50.0
+      receiver_depth_m: 100.0
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 1.5
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 500.0
+      r_max_m: 1100.0
+
+noise:
+  wenz_sea_state: 2
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav

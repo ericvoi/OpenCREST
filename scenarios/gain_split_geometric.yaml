@@ -1,0 +1,82 @@
+name: gain_split_geometric
+description: >
+  Session B §6 gain-split sanity — geometric-mode half of the pair.
+  Two modems at R=500 m, stationary, with only the direct path enabled
+  (no surface/bottom reflections, no noise). RX-side amplitude here should
+  match gain_split_static.yaml to within ~0.5 dB.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 152.0
+    rvr_db: -180.0
+  T-002:
+    tvr_db: 152.0
+    rvr_db: -180.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-002"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: 500.0
+    mode: geometric
+    initial_range_m: 500.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 50.0
+      receiver_depth_m: 100.0
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0           # match static-mode spherical (env.spreading_model: spherical → k=2)
+      enable_direct: true
+      enable_surface: false
+      enable_bottom: false
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 400.0
+      r_max_m: 600.0
+  - from: modem_b
+    to: modem_a
+    range_m: 500.0
+    mode: geometric
+    initial_range_m: 500.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 50.0
+      receiver_depth_m: 100.0
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0           # match static-mode spherical (env.spreading_model: spherical → k=2)
+      enable_direct: true
+      enable_surface: false
+      enable_bottom: false
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 400.0
+      r_max_m: 600.0
+
+noise:
+  disable: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav

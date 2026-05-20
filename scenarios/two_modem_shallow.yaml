@@ -1,0 +1,89 @@
+name: two_modem_shallow
+description: >
+  Two-modem shallow-water scenario with bidirectional channels.
+  Modem A and B communicate through a range-dependent multipath channel.
+  Modem B has a 2.5 ppm crystal tolerance — it will draw an actual clock
+  offset uniformly within ±2.5 ppm at scenario load, so the A↔B channel
+  exercises a small but non-zero relative Doppler from the clock mismatch.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: false
+  spreading_model: spherical    # cylindrical-to-spherical transition
+
+transducers:
+  T-001:
+    tvr_db: 172.0     # plausible mid-band transducer; refine when real data lands
+    rvr_db: -200.0
+  T-002:
+    tvr_db: 172.0     # second unit; slightly different so the two are clearly distinct
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    clock_offset_ppm: 30
+    velocity_radial_m_s: 0.0
+
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-002"
+    clock_offset_ppm: 30    # crystal tolerance (σ, ppm); actual is drawn ±30
+    velocity_radial_m_s: 0.0
+
+channels:
+  # A → B
+  - from: modem_a
+    to: modem_b
+    range_m: 500        
+    # Empirical trim — see loopback_simple.yaml. Hybrid spreading at 500 m
+    # / 31.5 kHz leaves ~+30 dB of chain gain; cancel.
+    gain_db: -25
+    multipath_taps:
+      # Tap delays are EXCESS over the direct path (Phase 2 semantics).
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+      - delay_s: 0.005
+        gain_db: -8.0
+        phase_deg: 180.0
+      - delay_s: 0.014
+        gain_db: -14.0
+        phase_deg: 0.0
+
+  # B → A (reciprocal channel, same geometry)
+  - from: modem_b
+    to: modem_a
+    range_m: 500
+    gain_db: -25           # see A→B above
+    multipath_taps:
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+      - delay_s: 0.005
+        gain_db: -8.0
+        phase_deg: 180.0
+      - delay_s: 0.014
+        gain_db: -14.0
+        phase_deg: 0.0
+
+noise:
+  wenz_sea_state: 3
+  min_margin_above_afe_db: 10.0
+  saltwater: false
+  tonal_sources:
+    - frequency_hz: 50.0      # power-line interference
+      amplitude_linear: 0.005
+      bandwidth_hz: 0.5
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav
+  log_processing_time_histogram: true   # populates processing_time{} in summary
+  log_message_events: true              # emits <modem>_events.jsonl per modem
+  # run_summary_path: "logs/custom_name.json"   # optional override; omit = default
+

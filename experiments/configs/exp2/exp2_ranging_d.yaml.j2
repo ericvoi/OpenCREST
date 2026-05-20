@@ -1,0 +1,109 @@
+{#- Experiment 2 config (d): config (c) + two tonal interferers.
+
+Same geometric scene as (c), plus two narrowband tonal sources bracketing
+the 30 kHz modem fc (25 kHz, 35 kHz). Amplitudes calibrated so the
+in-band SNR at the receiver is moderate but the ranging packet remains
+demodulable.
+
+Variables: same as config (a).
+-#}
+name: exp2_ranging_d
+description: >
+  Experiment 2 — config (d): config (c) with two tonal interferers at
+  25 kHz and 35 kHz overlaid on the Wenz sea state 3 noise.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_range_m: 1000.0
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 172.0
+    rvr_db: -200.0
+  T-002:
+    tvr_db: 170.0
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial | default('OA-2-1') }}"
+    transducer_id: "T-001"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial | default('OA-2-2') }}"
+    transducer_id: "T-002"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: 500.0
+    # Trim to keep modem B's ADC out of mild clipping (see config (b)
+    # for the empirical reasoning — same chain math at fc=31.5 kHz).
+    gain_db: -10.0
+    mode: geometric
+    initial_range_m: 500.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 50.0
+      receiver_depth_m: 100.0
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: true
+      enable_bottom_surface: true
+      r_min_m: 400.0
+      r_max_m: 600.0
+  - from: modem_b
+    to: modem_a
+    range_m: 500.0
+    # Trim to keep modem B's ADC out of mild clipping (see config (b)
+    # for the empirical reasoning — same chain math at fc=31.5 kHz).
+    gain_db: -10.0
+    mode: geometric
+    initial_range_m: 500.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 100.0
+      receiver_depth_m: 50.0
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: true
+      enable_bottom_surface: true
+      r_min_m: 400.0
+      r_max_m: 600.0
+
+noise:
+  wenz_sea_state: 3
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+  tonal_sources:
+    - frequency_hz: 25000.0
+      amplitude_linear: 0.02
+      bandwidth_hz: 50.0
+    - frequency_hz: 35000.0
+      amplitude_linear: 0.02
+      bandwidth_hz: 50.0
+
+logging:
+  log_raw_tx: false
+  log_raw_rx: {{ (log_raw_rx | default(false)) | string | lower }}
+  log_processed: false
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: 0

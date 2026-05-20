@@ -1,0 +1,94 @@
+{#- Base two-modem scenario template.
+
+Variables:
+  seed                       (int)   random_seed for the run
+  modem_a_serial             (str)   USB serial for modem A (default OA-2-1)
+  modem_b_serial             (str)   USB serial for modem B (default OA-2-2)
+  range_m                    (float) line-of-sight range, both directions
+  v_radial_m_s               (float) relative radial velocity, A-side
+  channel_gain_db            (float) channel-level gain trim (typ. -30 dB)
+  wenz_sea_state             (int)   Wenz sea state index (0..6)
+  output_directory           (str)   per-cell output directory
+  log_processing_time_histogram (bool, optional, default true)
+  log_message_events            (bool, optional, default true)
+  multipath_taps             (list of {delay_s, gain_db, phase_deg}, optional)
+                                     defaults to the shallow-water 3-tap set
+
+The render is intentionally deterministic for a given parameter dict so the
+template test can golden-match byte-for-byte.
+-#}
+name: two_modem_base
+description: >
+  Two-modem bidirectional scenario rendered by the experiment harness.
+  Range, sea state, and seed are template parameters; the multipath taps
+  default to a shallow-water shape and can be overridden per cell.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: false
+  spreading_model: spherical
+
+transducers:
+  T-001:
+    tvr_db: 172.0
+    rvr_db: -200.0
+  T-002:
+    tvr_db: 172.0
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial | default('OA-2-1') }}"
+    transducer_id: "T-001"
+    clock_offset_ppm: 30
+    velocity_radial_m_s: {{ "%.6f"|format(v_radial_m_s|float) }}
+
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial | default('OA-2-2') }}"
+    transducer_id: "T-002"
+    clock_offset_ppm: 30
+    velocity_radial_m_s: 0.0
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: {{ "%.3f"|format(range_m|float) }}
+    gain_db: {{ "%.3f"|format(channel_gain_db|float) }}
+    multipath_taps:
+{%- set taps = multipath_taps | default([
+      {'delay_s': 0.000, 'gain_db':  0.0, 'phase_deg':   0.0},
+      {'delay_s': 0.005, 'gain_db': -8.0, 'phase_deg': 180.0},
+      {'delay_s': 0.014, 'gain_db':-14.0, 'phase_deg':   0.0},
+    ]) %}
+{%- for tap in taps %}
+      - delay_s: {{ "%.6f"|format(tap.delay_s|float) }}
+        gain_db: {{ "%.3f"|format(tap.gain_db|float) }}
+        phase_deg: {{ "%.3f"|format(tap.phase_deg|float) }}
+{%- endfor %}
+
+  - from: modem_b
+    to: modem_a
+    range_m: {{ "%.3f"|format(range_m|float) }}
+    gain_db: {{ "%.3f"|format(channel_gain_db|float) }}
+    multipath_taps:
+{%- for tap in taps %}
+      - delay_s: {{ "%.6f"|format(tap.delay_s|float) }}
+        gain_db: {{ "%.3f"|format(tap.gain_db|float) }}
+        phase_deg: {{ "%.3f"|format(tap.phase_deg|float) }}
+{%- endfor %}
+
+noise:
+  wenz_sea_state: {{ wenz_sea_state|int }}
+  min_margin_above_afe_db: 10.0
+  saltwater: false
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: {{ (log_processing_time_histogram | default(true)) | string | lower }}
+  log_message_events: {{ (log_message_events | default(true)) | string | lower }}
+
+random_seed: {{ seed|int }}

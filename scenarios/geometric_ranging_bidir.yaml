@@ -1,0 +1,89 @@
+name: geometric_ranging_bidir
+description: >
+  Bidirectional geometric-mode scenario for two-way ranging validation.
+  Both modems stationary at R=500 m with full method-of-images multipath
+  (direct + surface + bottom). RTT should match 2·R/c plus the documented
+  3–5 m HW+USB+sim bias from project_ranging_bias_first_message.md.
+  Compares geometric-mode ranging accuracy against the static-mode
+  baseline established 2026-05-18 with two_modem_shallow.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 152.0
+    rvr_db: -180.0
+  T-002:
+    tvr_db: 152.0
+    rvr_db: -180.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-002"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+
+channels:
+  # A → B
+  - from: modem_a
+    to: modem_b
+    range_m: 500.0
+    mode: geometric
+    initial_range_m: 500.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 50.0          # modem A
+      receiver_depth_m: 100.0       # modem B
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0     # spherical, matches static path_loss for direct comparison
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 400.0
+      r_max_m: 600.0
+
+  # B → A (reciprocal: swap source/receiver depths)
+  - from: modem_b
+    to: modem_a
+    range_m: 500.0
+    mode: geometric
+    initial_range_m: 500.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 100.0         # modem B
+      receiver_depth_m: 50.0        # modem A
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 400.0
+      r_max_m: 600.0
+
+noise:
+  wenz_sea_state: 2
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav

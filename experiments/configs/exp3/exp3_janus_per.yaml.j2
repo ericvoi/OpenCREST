@@ -1,0 +1,109 @@
+{#- Experiment 3 — JANUS PER vs range, closing-platform sweep (paper §4.4).
+
+Same geometry as Exp 1 (D=120 m, z_s=50 m, z_r=100 m, three macro paths:
+direct + surface Γ=-0.9 + bottom Γ=0.7). Modem A closes on modem B at
+v=-2 m/s, no acceleration; initial range 1000 m. Floor 200 m is enforced
+by the host driver (which SIGTERMs the run once R reaches the floor).
+
+Variables (rendered by exp3_janus_per.py):
+  sea_state                 (int)   Wenz sea state index swept over {1, 3, 5}
+  seed                      (int)   per-cell random_seed
+  velocity_m_s              (float) closing velocity on modem A
+                                    (negative = approaching; default -1.0)
+  modem_a_serial            (str)   default OA-2-1
+  modem_b_serial            (str)   default OA-2-2
+  output_directory          (str)   per-cell output directory
+  log_raw_rx                (bool, optional, default false)
+-#}
+name: exp3_janus_per
+description: >
+  Experiment 3 — JANUS 011_01 PER vs range during a 1000 m → 200 m
+  approach at v=-2 m/s, geometric scene (direct + surface + bottom),
+  Wenz sea state {{ sea_state }}, seed {{ seed }}.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_range_m: 1000.0
+  max_message_duration_s: 4.0
+
+transducers:
+  T-001:
+    tvr_db: 172.0
+    rvr_db: -200.0
+  T-002:
+    tvr_db: 170.0
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial | default('OA-2-1') }}"
+    transducer_id: "T-001"
+    velocity_radial_m_s: {{ "%.6f"|format((velocity_m_s | default(-1.0))|float) }}
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial | default('OA-2-2') }}"
+    transducer_id: "T-002"
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+
+channels:
+  # A → B
+  - from: modem_a
+    to: modem_b
+    range_m: 1000.0
+    gain_db: -17.0
+    mode: geometric
+    initial_range_m: 1000.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 50.0
+      receiver_depth_m: 100.0
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 150.0
+      r_max_m: 1100.0
+  # B → A (swap depths so the receiver-depth convention stays consistent)
+  - from: modem_b
+    to: modem_a
+    range_m: 1000.0
+    gain_db: -17.0
+    mode: geometric
+    initial_range_m: 1000.0
+    geometry:
+      water_depth_m: 120.0
+      source_depth_m: 100.0
+      receiver_depth_m: 50.0
+      gamma_surface: -0.9
+      gamma_bottom: 0.7
+      spreading_exponent_k: 2.0
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: false
+      enable_bottom_surface: false
+      r_min_m: 150.0
+      r_max_m: 1100.0
+
+noise:
+  wenz_sea_state: {{ sea_state | int }}
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: false
+  log_raw_rx: {{ (log_raw_rx | default(false)) | string | lower }}
+  log_processed: false
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: {{ seed | int }}

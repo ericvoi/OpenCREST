@@ -1,0 +1,58 @@
+name: gain_split_static
+description: >
+  Session B §6 gain-split sanity — static-mode half of the pair.
+  Two modems at R=500 m with a single zero-delay tap (no multipath, no noise).
+  RX-side amplitude here should match gain_split_geometric.yaml to within
+  ~0.5 dB, validating that geometric mode's split between AFE-chain gain
+  (compute_channel_afe_chain_gain_db) and scene-supplied spreading + Thorp
+  (1/ℓ^k · 10^(-α·ℓ/20000)) recomposes the static-mode physical_gain_dB.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 152.0
+    rvr_db: -180.0
+  T-002:
+    tvr_db: 152.0
+    rvr_db: -180.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    velocity_radial_m_s: 0.0
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-002"
+    velocity_radial_m_s: 0.0
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: 500.0
+    multipath_taps:
+      - delay_s: 0.0
+        gain_db: 0.0
+        phase_deg: 0.0
+  - from: modem_b
+    to: modem_a
+    range_m: 500.0
+    multipath_taps:
+      - delay_s: 0.0
+        gain_db: 0.0
+        phase_deg: 0.0
+
+noise:
+  disable: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav

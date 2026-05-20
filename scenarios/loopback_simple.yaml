@@ -1,0 +1,69 @@
+name: loopback_simple
+description: >
+  Single modem transmitting to itself through a shallow-water multipath channel.
+  Direct path plus surface and bottom reflections — visible in analyze_wav.py
+  as distinct arrivals on the cross-correlation curve. The channel-level
+  gain_db cancels spreading + Thorp absorption so the signal returns to the
+  DAC above 12-bit quantization (in a real two-modem setup the RX transducer
+  and pre-amp provide this gain).
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  # PairBuffer holds an entire message in flight — the receiver does not
+  # drain while the source modem is in TX state in single-modem loopback.
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 150.0     # plausible mid-band transducer; refine when real data lands
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    clock_offset_ppm: 20.0
+
+channels:
+  - from: modem_a
+    to: modem_a
+    range_m: 150.0          # 100 ms direct-path delay at 1500 m/s
+    # Empirical trim. With firmware-reported voltage anchors + attenuation
+    # pads + the T-001 placeholder TVR/RVR, the physical-gain chain sits
+    # ~+30 dB at 150 m / 31.5 kHz (idx=1, the firmware-forced HIL pad).
+    # Subtract that to bring loopback to roughly unity. Expect this to drop
+    # toward 0 once the actual transducer's TVR/RVR are characterised in
+    # the lake (effective values fold in boundary loss + off-resonance
+    # response, typically 25–30 dB optimistic vs spec sheets).
+    # gain_db: -30.0
+    direct_los: true
+    multipath_taps:
+      # Tap delays are EXCESS over the direct path; gains are dB relative to
+      # the main (zero-delay) tap.
+      - delay_s: 0.000      # direct
+        gain_db: 0.0
+        phase_deg: 0.0
+      - delay_s: 0.004      # 4 ms surface bounce
+        gain_db: -6.0
+        phase_deg: 180.0
+      - delay_s: 0.011      # 11 ms bottom bounce
+        gain_db: -10.0
+        phase_deg: 0.0
+
+noise:
+  wenz_sea_state: 2
+  # Default 10 dB margin above the modem's measured AFE PSD. If natural
+  # Wenz at fc is already loud enough, no boost is applied (clipping
+  # headroom preserved); otherwise the simulator scales noise + every TX
+  # channel by the deficit and warns at startup.
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "logs"
+  file_format: wav

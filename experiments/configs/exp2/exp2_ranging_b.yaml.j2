@@ -1,0 +1,94 @@
+{#- Experiment 2 config (b): 3 static taps + Doppler + clock offset + noise.
+
+Static-mode multipath (3 taps from loopback_multipath.yaml, scaled to
+R=500 m), bulk Farrow Doppler from a 1 m/s radial velocity on modem A,
+50 ppm clock offset on modem A, Wenz sea state 3 ambient noise.
+
+Variables: same as config (a).
+-#}
+name: exp2_ranging_b
+description: >
+  Experiment 2 — config (b): R=500 m with 3-tap static multipath, bulk
+  Farrow Doppler (1 m/s + 50 ppm), Wenz sea state 3 noise.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 172.0
+    rvr_db: -200.0
+  T-002:
+    tvr_db: 170.0
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial | default('OA-2-1') }}"
+    transducer_id: "T-001"
+    clock_offset_ppm: 50.0
+    velocity_radial_m_s: -1.0
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial | default('OA-2-2') }}"
+    transducer_id: "T-002"
+    clock_offset_ppm: 0.0
+    velocity_radial_m_s: 0.0
+    acceleration_radial_m_s2: 0.0
+
+channels:
+  # A → B
+  - from: modem_a
+    to: modem_b
+    range_m: 500.0
+    # Trim to keep modem B's ADC out of mild clipping (verify showed
+    # SNR(rx_b) ~34 dB at gain_db=0; verify confirmed clipping but not
+    # catastrophic. -10 dB lands SNR(rx_b) ~24 dB, comfortably linear).
+    gain_db: -10.0
+    multipath_taps:
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+      - delay_s: 0.005
+        gain_db: -6.0
+        phase_deg: 180.0
+      - delay_s: 0.012
+        gain_db: -10.0
+        phase_deg: 0.0
+  # B → A
+  - from: modem_b
+    to: modem_a
+    range_m: 500.0
+    # Trim to keep modem B's ADC out of mild clipping (verify showed
+    # SNR(rx_b) ~34 dB at gain_db=0; verify confirmed clipping but not
+    # catastrophic. -10 dB lands SNR(rx_b) ~24 dB, comfortably linear).
+    gain_db: -10.0
+    multipath_taps:
+      - delay_s: 0.000
+        gain_db: 0.0
+        phase_deg: 0.0
+      - delay_s: 0.005
+        gain_db: -6.0
+        phase_deg: 180.0
+      - delay_s: 0.012
+        gain_db: -10.0
+        phase_deg: 0.0
+
+noise:
+  wenz_sea_state: 3
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: false
+  log_raw_rx: {{ (log_raw_rx | default(false)) | string | lower }}
+  log_processed: false
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: 0

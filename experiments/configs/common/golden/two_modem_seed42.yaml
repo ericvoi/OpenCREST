@@ -1,0 +1,78 @@
+name: two_modem_base
+description: >
+  Two-modem bidirectional scenario rendered by the experiment harness.
+  Range, sea state, and seed are template parameters; the multipath taps
+  default to a shallow-water shape and can be overridden per cell.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: false
+  spreading_model: spherical
+
+transducers:
+  T-001:
+    tvr_db: 172.0
+    rvr_db: -200.0
+  T-002:
+    tvr_db: 172.0
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+    clock_offset_ppm: 30
+    velocity_radial_m_s: -2.000000
+
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-002"
+    clock_offset_ppm: 30
+    velocity_radial_m_s: 0.0
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: 500.000
+    gain_db: -30.000
+    multipath_taps:
+      - delay_s: 0.000000
+        gain_db: 0.000
+        phase_deg: 0.000
+      - delay_s: 0.005000
+        gain_db: -8.000
+        phase_deg: 180.000
+      - delay_s: 0.014000
+        gain_db: -14.000
+        phase_deg: 0.000
+
+  - from: modem_b
+    to: modem_a
+    range_m: 500.000
+    gain_db: -30.000
+    multipath_taps:
+      - delay_s: 0.000000
+        gain_db: 0.000
+        phase_deg: 0.000
+      - delay_s: 0.005000
+        gain_db: -8.000
+        phase_deg: 180.000
+      - delay_s: 0.014000
+        gain_db: -14.000
+        phase_deg: 0.000
+
+noise:
+  wenz_sea_state: 3
+  min_margin_above_afe_db: 10.0
+  saltwater: false
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: true
+  output_directory: "experiments/results/golden/cell_seed42"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: 42
