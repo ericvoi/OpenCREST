@@ -8,11 +8,9 @@ namespace openCREST::protocol {
 
 namespace {
 
-// Range-check the physically-meaningful fields of a decoded calibration
-// packet. Returns true if the packet is acceptable; logs a specific error
-// and returns false otherwise. All checks are tolerant of the
-// CalibrationData defaults so test fixtures that round-trip a default-
-// constructed struct continue to pass.
+// Range-check physically-meaningful calibration fields. Returns true if
+// acceptable; logs a specific error otherwise. Tolerant of default-
+// constructed CalibrationData so fixtures round-tripping defaults pass.
 bool validate_calibration_ranges(const CalibrationData& cal) {
     if (!std::isfinite(cal.noise_floor_psd_counts_per_sqrt_hz) ||
         cal.noise_floor_psd_counts_per_sqrt_hz < 0.0f) {
@@ -47,25 +45,19 @@ bool validate_calibration_ranges(const CalibrationData& cal) {
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Data packets
-// ---------------------------------------------------------------------------
-
 void ProtocolCodec::encode_data_packet(uint8_t* buf_512,
                                         uint16_t packet_id,
                                         const uint16_t* samples,
                                         size_t sample_count) {
-    // Header: packet_id little-endian
     buf_512[0] = static_cast<uint8_t>(packet_id & 0xFF);
     buf_512[1] = static_cast<uint8_t>((packet_id >> 8) & 0xFF);
 
     uint16_t* dst = reinterpret_cast<uint16_t*>(buf_512 + DATA_HEADER_BYTES);
     const size_t n = std::min(sample_count, DATA_SAMPLES_PER_PKT);
 
-    // Samples are uint16_t LE; on x86/ARM this is a plain copy
+    // uint16_t LE samples — plain copy on x86/ARM.
     std::memcpy(dst, samples, n * sizeof(uint16_t));
 
-    // Zero-pad any remaining sample slots
     if (n < DATA_SAMPLES_PER_PKT) {
         std::memset(dst + n, 0, (DATA_SAMPLES_PER_PKT - n) * sizeof(uint16_t));
     }
@@ -84,10 +76,6 @@ bool ProtocolCodec::decode_data_packet(const uint8_t* buf_512,
     std::memcpy(samples, src, actual_samples * sizeof(uint16_t));
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// Control packets
-// ---------------------------------------------------------------------------
 
 void ProtocolCodec::encode_command(uint8_t* buf_64,
                                     CommandId cmd,
@@ -160,14 +148,10 @@ void ProtocolCodec::encode_status(uint8_t* buf_64, const StatusPayload& status) 
     std::memcpy(buf_64, &status, sizeof(StatusPayload));
 }
 
-// ---------------------------------------------------------------------------
-// Sequence tracking
-// ---------------------------------------------------------------------------
-
 bool ProtocolCodec::check_sequence(uint16_t received_id) {
     if (received_id != expected_id_) {
         ++gap_count_;
-        // Re-sync: next expected is the one after the packet we just received
+        // Re-sync from the packet just received.
         expected_id_ = static_cast<uint16_t>(received_id + 1u);
         return false;
     }

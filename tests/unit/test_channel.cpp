@@ -296,8 +296,7 @@ TEST(Channel, ComplexTapShiftsToneByPhase) {
     // a cosine input, the real-only channel reproduces the cosine and the
     // π/2 channel produces -sin = Hilbert(cos). The two outputs are
     // orthogonal across many cycles, so their inner product is ≈0 while
-    // each individually retains substantial RMS. This avoids any need to
-    // reason about absolute phase references between input and output.
+    // each individually retains substantial RMS.
     constexpr float FREQ = 30'000.0f;
     constexpr size_t N   = 8192;
 
@@ -445,9 +444,7 @@ TEST(Channel, ComplexAndRealTapsCoexist) {
 }
 
 TEST(Channel, RealOnlyChannelDoesNotShiftByHilbertDelay) {
-    // Sanity: confirm the Hilbert path is not engaged when all taps have
-    // phase = 0. Existing FirstSampleArrivesAtBaseDelay test relied on this
-    // implicitly; this is the explicit pin.
+    // Confirms the Hilbert path is not engaged when all taps have phase = 0.
     std::vector<MultipathTap> taps = {{0.0f, 1.0f, 0.0f}};
     auto cfg = make_multitap_config(taps);
     cfg.range_m = 3.0f;
@@ -620,9 +617,8 @@ TEST(Channel, MessageEndExposesMultipathTail) {
     auto impulse = openCREST::test::make_impulse(64, 0, 1.0f);
     ch.process(impulse.data(), 64, pb);
 
-    // Without on_message_end, the impulse at delta=50 wouldn't be visible
-    // because commit_source_progress only exposed up to the last source pos
-    // which is < 50 + Farrow_latency.
+    // on_message_end must flush the multipath tail so the delta-50 impulse
+    // becomes visible (commit_source_progress alone wouldn't expose it).
     const size_t avail_before = pb.available_read();
 
     ch.on_message_end(pb);

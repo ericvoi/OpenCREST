@@ -32,14 +32,14 @@ WavWriter::WavWriter(const std::string& path, uint32_t sample_rate,
 {
     file_.open(path, std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
     if (!file_.is_open()) {
-        // Try without in flag (file may not exist yet)
+        // File may not exist yet — create then reopen in read+write so we
+        // can seek back to patch the header.
         file_.clear();
         file_.open(path, std::ios::out | std::ios::binary | std::ios::trunc);
         if (!file_.is_open()) {
             spdlog::error("WavWriter: cannot open '{}'", path);
             return;
         }
-        // Reopen for read+write so we can seek back to patch header
         file_.close();
         file_.open(path, std::ios::in | std::ios::out | std::ios::binary);
     }
@@ -60,9 +60,9 @@ WavWriter::~WavWriter() {
 size_t WavWriter::write(const uint16_t* samples, size_t count) {
     if (!is_open() || count == 0) return 0;
 
-    // Samples arrive as unsigned N-bit codes (N = source_bits) stored in the
-    // low bits of uint16_t. Left-shift to fill the top of the 16-bit field,
-    // then XOR 0x8000 to convert unsigned-midpoint to signed-zero PCM16.
+    // Samples arrive as unsigned N-bit codes in the low bits of uint16_t.
+    // Shift into the top of the 16-bit field, then XOR 0x8000 to convert
+    // unsigned-midpoint to signed-zero PCM16.
     constexpr size_t CHUNK = 512;
     uint16_t buf[CHUNK];
     const unsigned shift = source_shift_;
@@ -96,10 +96,6 @@ void WavWriter::finalize() {
 bool WavWriter::is_open() const {
     return file_.is_open();
 }
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
 
 void WavWriter::write_le16(uint16_t v) {
     const char bytes[2] = {

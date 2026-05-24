@@ -20,10 +20,6 @@ BufferPacer::BufferPacer(uint32_t dac_rate, uint16_t buffer_capacity,
     , desired_rate_(nominal_rate_)
 {}
 
-// ---------------------------------------------------------------------------
-// Status update + PI step
-// ---------------------------------------------------------------------------
-
 void BufferPacer::update_fill(uint16_t fill_samples) {
     update_fill(fill_samples, clock::now());
 }
@@ -43,8 +39,8 @@ void BufferPacer::update_controller(uint16_t fill_samples, time_point now) {
     const float err = target_fill_ - fill_frac;  // positive when below target
 
     if (has_prev_update_) {
-        // Real elapsed time between status reports. Cap to bound the step
-        // when the gap is unusually long (e.g. just after a state transition).
+        // Clamp dt to bound the step when the gap is unusually long
+        // (e.g. just after a state transition).
         const float dt = std::chrono::duration<float>(
             now - prev_update_time_).count();
         const float dt_clamped = std::min(dt, 0.1f);
@@ -58,10 +54,6 @@ void BufferPacer::update_controller(uint16_t fill_samples, time_point now) {
     desired_rate_ = std::clamp(desired_rate_, min_rate_, max_rate_);
 }
 
-// ---------------------------------------------------------------------------
-// Reset (called on transition into RX)
-// ---------------------------------------------------------------------------
-
 void BufferPacer::reset() {
     has_report_                = false;
     packets_sent_since_report_ = 0;
@@ -71,18 +63,12 @@ void BufferPacer::reset() {
     schedule_initialized_      = false;
 }
 
-// ---------------------------------------------------------------------------
-// Packet-sent notification
-// ---------------------------------------------------------------------------
-
 void BufferPacer::notify_packet_sent() {
     ++packets_sent_since_report_;
 }
 
-// ---------------------------------------------------------------------------
-// Extrapolation (diagnostic only — controller updates from status reports)
-// ---------------------------------------------------------------------------
-
+// Diagnostic extrapolation between status reports (controller itself only
+// updates on status arrival).
 float BufferPacer::extrapolate(time_point now) const {
     if (!has_report_) return target_fill_;
 
@@ -110,10 +96,6 @@ float BufferPacer::estimated_fill_fraction(time_point now) const {
     return extrapolate(now);
 }
 
-// ---------------------------------------------------------------------------
-// Time-based send decision
-// ---------------------------------------------------------------------------
-
 bool BufferPacer::should_send() {
     return should_send(clock::now());
 }
@@ -129,13 +111,9 @@ bool BufferPacer::should_send(time_point now) {
     const auto period_d = std::chrono::duration_cast<duration>(period);
     next_send_time_ += period_d;
 
-    // Bounded catch-up. If next_send_time_ is still in the past after the
-    // advance, the caller fell behind (typically: libusb poll blocked the
-    // I/O loop for ~1 ms). Allow up to MAX_CATCHUP_SLOTS of the backlog to
-    // be redeemed as back-to-back sends — the old re-anchor forfeited those
-    // slots permanently, which capped throughput below nominal whenever poll
-    // stalls ate real time. Beyond that, re-anchor to avoid bursting through
-    // a large backlog that would over-fill the modem ring.
+    // Bounded catch-up: allow up to MAX_CATCHUP_SLOTS of accumulated
+    // backlog to be redeemed back-to-back after a brief I/O stall; beyond
+    // that, re-anchor to avoid bursting through the modem ring.
     constexpr int MAX_CATCHUP_SLOTS = 3;
     if (now - next_send_time_ > period_d * MAX_CATCHUP_SLOTS) {
         next_send_time_ = now + period_d;

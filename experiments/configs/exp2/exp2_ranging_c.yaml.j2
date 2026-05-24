@@ -1,18 +1,16 @@
 {#- Experiment 2 config (c): 5-tap geometric scene, stationary modems.
 
-Same scene geometry as Exp 1 (D=120 m, z_s=50 m, z_r=100 m), with the
-three macro-paths (direct, surface, bottom) plus surface-bottom and
-bottom-surface enabled to reach 5 taps. Stationary — the per-tap Farrow
-code path is exercised but the per-tap range stays constant. Wenz sea
-state 3 noise.
+Same scene geometry as Exp 1 (D=120 m, z_s=50 m, z_r=100 m): direct +
+surface + bottom + surface-bottom + bottom-surface (5 taps). Stationary
+modems, Wenz sea state 3 noise.
 
 Variables: same as config (a).
 -#}
 name: exp2_ranging_c
 description: >
-  Experiment 2 — config (c): R=500 m geometric scene with 5 taps
-  (direct + surface + bottom + surface-bottom + bottom-surface),
-  modems stationary, Wenz sea state 3 noise.
+  Bidirectional ranging at R=500 m through a 5-tap geometric scene
+  (direct + surface + bottom + surface-bottom + bottom-surface), modems
+  stationary, Wenz sea state 3 noise.
 
 environment:
   sound_speed_m_s: 1500.0
@@ -46,8 +44,7 @@ channels:
   - from: modem_a
     to: modem_b
     range_m: 500.0
-    # Trim to keep modem B's ADC out of mild clipping (see config (b)
-    # for the empirical reasoning — same chain math at fc=31.5 kHz).
+    # Trim to keep modem B's ADC out of mild clipping (see config (b)).
     gain_db: -10.0
     mode: geometric
     initial_range_m: 500.0
@@ -69,8 +66,7 @@ channels:
   - from: modem_b
     to: modem_a
     range_m: 500.0
-    # Trim to keep modem B's ADC out of mild clipping (see config (b)
-    # for the empirical reasoning — same chain math at fc=31.5 kHz).
+    # Trim to keep modem B's ADC out of mild clipping (see config (b)).
     gain_db: -10.0
     mode: geometric
     initial_range_m: 500.0

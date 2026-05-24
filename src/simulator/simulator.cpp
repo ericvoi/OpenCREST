@@ -29,8 +29,7 @@ std::string iso8601_utc(std::chrono::system_clock::time_point t) {
 }
 
 bool run_summary_enabled(const LoggingConfig& cfg) {
-    // Either an explicit path override OR any of the new observability
-    // flags asks for summary output.
+    // Explicit path OR any observability flag opts into summary output.
     return !cfg.run_summary_path.empty()
         || cfg.log_processing_time_histogram
         || cfg.log_message_events;
@@ -53,10 +52,6 @@ Simulator::~Simulator() {
     join_all_threads();
     if (logger_) logger_->finalize();
 }
-
-// ---------------------------------------------------------------------------
-// initialize()
-// ---------------------------------------------------------------------------
 
 bool Simulator::initialize() {
     return load_scenario()
@@ -88,28 +83,23 @@ bool Simulator::discover_modems() {
 }
 
 bool Simulator::calibrate_modems() {
-    // Calibration is performed inside discover_and_connect().
-    // Nothing additional to do here; kept as a separate step for clarity
-    // and future expansion (e.g., re-calibration during long sessions).
+    // Calibration runs inside discover_and_connect(); kept as a separate
+    // step for clarity and future expansion (e.g., re-calibration).
     return true;
 }
 
 bool Simulator::build_channel_engine() {
-    // Allocate ring buffers (one pair per modem)
     buffers_.resize(modems_.size());
 
-    // Gather sample rate from first modem's calibration
+    // Sample rate is shared across modems; take it from the first.
     const uint32_t sample_rate = modems_.empty()
         ? 500'000u
         : modems_[0]->calibration().adc_sampling_rate;
 
-    // Build per-modem contexts for the ChannelEngine
     std::vector<PerModemContext> contexts;
     contexts.reserve(modems_.size());
 
-    // Resolve the rx_atten_idx the simulator must assume per receiver. The
-    // hardware-forced index in HIL operation is the same for every channel
-    // into a given receiver (the modem switches one global pad), but the
+    // The modem switches one global input-attenuation pad per receiver, but
     // YAML lets each channel declare its own. Take the first channel's
     // value as canonical and warn if a sibling disagrees.
     auto rx_atten_idx_for_modem = [&](const std::string& modem_id) -> uint8_t {
@@ -130,8 +120,8 @@ bool Simulator::build_channel_engine() {
         return first ? first->rx_atten_idx : uint8_t{1};
     };
 
-    // Pre-design the FIR shaping filter once; its peak-normalised response
-    // depends only on (sample_rate, sea_state, saltwater), all scenario-wide.
+    // FIR shaping-filter response depends only on scenario-wide values
+    // (sample_rate, sea_state, saltwater); design once.
     const auto shaping_taps = dsp::design_shaping_filter(
         static_cast<float>(sample_rate),
         scenario_.noise.wenz_sea_state,
@@ -141,7 +131,6 @@ bool Simulator::build_channel_engine() {
     for (size_t i = 0; i < modems_.size(); ++i) {
         const auto& modem = modems_[i];
 
-        // Find the matching ModemConfig by USB serial
         const ModemConfig* cfg = nullptr;
         for (const auto& mc : scenario_.modems) {
             if (mc.usb_serial == modem->id()) {
@@ -150,8 +139,7 @@ bool Simulator::build_channel_engine() {
             }
         }
 
-        // Resolve this modem's TransducerSpec from the scenario (loader
-        // already validated referential integrity).
+        // Loader already validated transducer_id referential integrity.
         TransducerSpec rx_transducer{};
         if (cfg) {
             const auto it = scenario_.transducers.find(cfg->transducer_id);
@@ -162,22 +150,18 @@ bool Simulator::build_channel_engine() {
         const std::string modem_id = cfg ? cfg->id : modem->id();
         const uint8_t atten_idx = rx_atten_idx_for_modem(modem_id);
 
-        // ------------------------------------------------------------------
-        // Per-receiver Phase C noise sizing. Comparison is in the preamp
-        // reference frame so it is invariant to the input attenuation pad
-        // and to the DAC/ADC voltage references.
-        //   1. Wenz amplitude-PSD at fc_rx → V/√Hz at preamp via RVR
-        //      (`natural_psd_dbv_at_preamp`).
+        // Per-receiver noise sizing in the preamp reference frame (invariant
+        // to input pad and DAC/ADC voltage references):
+        //   1. Wenz amplitude-PSD at fc_rx → V/√Hz at preamp via RVR.
         //   2. AFE counts/√Hz → V/√Hz at preamp via 1/preamp_gain
-        //      (`afe_psd_dbv_at_preamp`). preamp_gain itself is derived
-        //      from cal.loopback_gain & cal.input_attenuation[loopback_cal].
-        //   3. boost_db = max(0, afe_preamp + margin − natural_preamp).
-        //      Fed to every Channel feeding this modem so SNR is preserved
-        //      while noise dominates AFE by ≥ margin at the preamp input.
+        //      (derived from cal.loopback_gain and
+        //      cal.input_attenuation[loopback_cal]).
+        //   3. boost_db = max(0, afe_preamp + margin − natural_preamp), fed
+        //      to every Channel feeding this modem so SNR is preserved
+        //      while noise dominates AFE by ≥ margin.
         //   4. (natural + boost)_preamp → DAC sample dBFS by un-doing the
         //      operating input pad and V_ref_dac, then to total-RMS dBFS
         //      for NoiseGenerator via the FIR shape at fc_rx.
-        // ------------------------------------------------------------------
         const auto sizing = dsp::compute_receiver_noise_sizing(
             cal, rx_transducer,
             scenario_.noise.wenz_sea_state,
@@ -225,8 +209,7 @@ bool Simulator::build_channel_engine() {
         noise_cfg.wenz_sea_state = scenario_.noise.wenz_sea_state;
         noise_cfg.saltwater      = scenario_.noise.saltwater;
         if (scenario_.noise.disable) {
-            // Hard-silence: NoiseGenerator scales to a level so far below
-            // full-scale that injection is a no-op in practice.
+            // Effectively silent: well below full-scale, injection is a no-op.
             noise_cfg.target_level_db_re_fs = -300.0f;
         } else {
             noise_cfg.target_level_db_re_fs = dsp::psd_target_to_total_rms_dbfs(
@@ -261,7 +244,6 @@ bool Simulator::build_channel_engine() {
     engine_->set_metrics(&metrics_);
     spdlog::info("ChannelEngine built with {} channel(s)", scenario_.channels.size());
 
-    // Build the stream logger
     std::vector<logging::ModemLogInfo> log_infos;
     log_infos.reserve(modems_.size());
     for (const auto& m : modems_) {
@@ -274,16 +256,12 @@ bool Simulator::build_channel_engine() {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// run()
-// ---------------------------------------------------------------------------
-
 void Simulator::install_observability() {
     const auto& log = scenario_.logging;
 
-    // Processing-time histogram: one shared instance across all source
-    // workers. Deadline derived from the processing block size at the
-    // first modem's sample rate (all modems share a single rate today).
+    // One shared histogram across all source workers. Deadline derived from
+    // PROCESSING_BLOCK_SIZE at the first modem's sample rate (all modems
+    // share a single rate today).
     if (log.log_processing_time_histogram) {
         processing_time_stats_ = std::make_unique<ProcessingTimeStats>();
         const uint32_t fs = modems_.empty()
@@ -297,7 +275,6 @@ void Simulator::install_observability() {
         }
     }
 
-    // Per-source-modem message-event JSONL log.
     if (log.log_message_events) {
         message_event_logs_.resize(modems_.size());
         std::vector<MessageEventLog*> raw_logs(modems_.size(), nullptr);
@@ -354,13 +331,12 @@ void Simulator::run() {
 
     install_observability();
 
-    // Enter HIL mode on all modems
     for (auto& modem : modems_) {
         try {
             modem->enter_hil_mode();
-            // The modem is now in RX, but it only sends status packets in
-            // response to received data.  Bootstrap the I/O loop by setting
-            // the host-side state to RX so send_rx_data() starts immediately.
+            // Modem starts in RX but only emits status in response to
+            // received data; bootstrap by setting host-side state to RX
+            // so send_rx_data() begins immediately.
             modem->runtime_state().state.store(ModemState::RX,
                                                std::memory_order_release);
         } catch (const std::exception& e) {
@@ -370,12 +346,12 @@ void Simulator::run() {
         }
     }
 
-    // Spawn the per-source SourceWorker threads (owned by the engine).
+    // Spawn per-source SourceWorker threads (owned by the engine).
     if (engine_) engine_->start();
 
     start_io_threads();
 
-    // Main thread: print metrics every second, watch for stop signal
+    // Main loop: print metrics every second, watch for stop signal.
     spdlog::info("Simulation running. Press Ctrl+C to stop.");
     auto interval_start = Clock::now();
 
@@ -396,7 +372,6 @@ void Simulator::run() {
     // Stop & join the SourceWorker threads inside the engine.
     if (engine_) engine_->stop();
 
-    // Exit HIL mode
     for (auto& modem : modems_) {
         try { modem->exit_hil_mode(); } catch (...) {}
     }
@@ -404,7 +379,7 @@ void Simulator::run() {
     if (logger_) logger_->finalize();
 
     // Close per-modem event logs before composing the summary so the
-    // events.jsonl files referenced from the summary are flushed.
+    // referenced files are flushed.
     for (auto& el : message_event_logs_) {
         if (el) el->close();
     }
@@ -422,10 +397,6 @@ void Simulator::stop() {
     if (engine_) engine_->stop();
 }
 
-// ---------------------------------------------------------------------------
-// Private thread management
-// ---------------------------------------------------------------------------
-
 void Simulator::start_io_threads() {
     io_workers_.reserve(modems_.size());
     io_threads_.reserve(modems_.size());
@@ -442,10 +413,9 @@ void Simulator::start_io_threads() {
         );
         io_workers_.push_back(std::move(worker));
 
-        // Hand the freshly-built tracker + tx-start estimator to the
-        // ChannelEngine so SourceWorker arrival-alignment can query
-        // them across modem pairs. Safe to call before run() spawns
-        // any thread.
+        // Hand the tracker + tx-start estimator to the ChannelEngine so
+        // SourceWorker arrival-alignment can query them across modem pairs.
+        // Safe before any thread is spawned.
         if (engine_) {
             engine_->wire_modem_trackers(i,
                 &io_workers_[i]->fill_tracker(),

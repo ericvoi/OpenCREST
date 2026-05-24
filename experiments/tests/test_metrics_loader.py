@@ -1,8 +1,8 @@
 """Tests for the metrics loader, WAV reader, and determinism fingerprint.
 
-These three modules are tightly coupled (the determinism check uses
-the wav_io + metrics_loader parsers), so test them together against a
-shared synthetic cell-output fixture.
+These modules are tightly coupled (the determinism check uses the wav_io
+and metrics_loader parsers), so they share a synthetic cell-output
+fixture here.
 """
 from __future__ import annotations
 
@@ -76,14 +76,14 @@ def test_wav_io_reads_stub_minimal_wav(stub_cell_dir: Path) -> None:
 
 def test_wav_io_tolerates_zero_data_size(tmp_path: Path) -> None:
     """Writer-interrupted WAV: data chunk size set to 0; reader should
-    fall back to reading until EOF and parse without raising."""
+    fall back to reading until EOF without raising."""
     path = tmp_path / "ragged.wav"
     sample_rate = 500_000
     samples = b"\x00\x00\x10\x00\x20\x00"
     fmt = struct.pack("<4sIHHIIHH",
                       b"fmt ", 16, 1, 1, sample_rate,
                       sample_rate * 2, 2, 16)
-    data = struct.pack("<4sI", b"data", 0) + samples   # size=0 -> tolerant path
+    data = struct.pack("<4sI", b"data", 0) + samples   # size=0 triggers tolerant path
     riff = struct.pack("<4sI4s", b"RIFF", 0, b"WAVE")
     path.write_bytes(riff + fmt + data)
 
@@ -124,7 +124,7 @@ def test_load_sweep_long_form(tmp_path: Path, stub_binary: Path) -> None:
     )
     sweep.run()
     df = metrics_loader.load_sweep(out_dir)
-    # 2 cells x 2 modems x 3 events = 12 rows
+    # 2 cells * 2 modems * 3 events = 12 rows.
     assert len(df) == 12
     assert set(df["random_seed"].unique()) == {1, 2}
     assert set(df["modem_id"].unique()) == {"modem_a", "modem_b"}
@@ -164,9 +164,9 @@ def test_load_cdc_parses_timestamp_prefix(tmp_path: Path) -> None:
 
 def test_repeat_run_is_deterministic_under_stub(tmp_path: Path,
                                                 stub_binary: Path) -> None:
-    """The stub binary writes byte-identical artifacts on every run; the
-    determinism report should be all-PASS. This validates the wiring of
-    the fingerprint comparator end-to-end."""
+    """The stub binary writes byte-identical artifacts on every run, so
+    the determinism report should be all-PASS. Validates the fingerprint
+    comparator wiring end-to-end."""
     sweep = lambda out: Sweep(
         template_path = TEMPLATE,
         parameters    = {"seed": [99]},
@@ -180,7 +180,7 @@ def test_repeat_run_is_deterministic_under_stub(tmp_path: Path,
     cell_b = sweep(tmp_path / "b")
     report = determinism.compare_cells(cell_a, cell_b)
     assert report.ok, "\n" + report.to_text()
-    # Ensure we actually compared something interesting.
+    # Make sure non-trivial artifacts were compared.
     arts = [r.artifact for r in report.results]
     assert any(a.startswith("wav:")     for a in arts)
     assert any(a.startswith("events:")  for a in arts)

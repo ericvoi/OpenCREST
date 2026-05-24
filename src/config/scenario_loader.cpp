@@ -11,20 +11,14 @@ namespace openCREST {
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 float spreading_factor_from_model(const std::string& model) {
     if (model == "cylindrical") return 1.0f;
     if (model == "hybrid")      return 1.5f;
     return 2.0f;  // spherical (default)
 }
 
-// Draw a sample from a normal distribution with σ = tolerance, rejecting
-// values that fall outside [−tolerance, +tolerance]. With σ = tolerance the
-// untruncated tails contribute ~32 % of mass, so rejection terminates fast
-// in practice; we still cap retries to keep this bounded.
+// Truncated-normal draw with σ = tolerance, rejecting samples outside
+// [−tolerance, +tolerance]. Retries are bounded.
 float draw_truncated_normal_ppm(float tolerance, std::mt19937_64& rng) {
     if (tolerance <= 0.0f) return 0.0f;
     std::normal_distribution<float> dist(0.0f, tolerance);
@@ -33,13 +27,10 @@ float draw_truncated_normal_ppm(float tolerance, std::mt19937_64& rng) {
         const float x = dist(rng);
         if (std::fabs(x) <= tolerance) return x;
     }
-    // Should never happen with σ = tolerance (P(|x| > σ) ≈ 0.32, so 1000
-    // consecutive rejects has probability ~10⁻⁴⁹⁵). Fall through with a
-    // clamped value just in case.
     return 0.0f;
 }
 
-// Parse and validate the top-level structure.
+// Parse and validate the top-level YAML structure.
 ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
     if (!root.IsMap()) {
         throw ScenarioLoadError(source + ": root node must be a YAML mapping");
@@ -72,10 +63,9 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
             cfg.environment.spreading_factor = env["spreading_factor"].as<float>();
         if (env["center_freq_khz"]) {
             throw ScenarioLoadError(source +
-                ": environment.center_freq_khz is no longer accepted — modem "
-                "center frequency now comes from the firmware-reported "
-                "calibration (CalibrationData::center_freq_hz). Remove this "
-                "field from the scenario YAML.");
+                ": environment.center_freq_khz is not accepted — modem center "
+                "frequency comes from the firmware-reported calibration "
+                "(CalibrationData::center_freq_hz). Remove this field.");
         }
         if (env["max_range_m"])
             cfg.environment.max_range_m = env["max_range_m"].as<float>();
@@ -89,9 +79,8 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
         }
     }
 
-    // --- transducers (required if any modem references one) ---
-    // We parse this before modems so that modem-side validation can
-    // verify every transducer_id resolves to a defined entry.
+    // --- transducers ---
+    // Parsed before modems so transducer_id references can be validated.
     if (const YAML::Node& tx_node = root["transducers"]) {
         if (!tx_node.IsMap()) {
             throw ScenarioLoadError(source +
@@ -183,10 +172,9 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
         cfg.modems.push_back(std::move(mc));
     }
 
-    // Sample each modem's actual crystal offset from a truncated normal with
-    // σ = its declared tolerance. Done after all modems are loaded so the
-    // RNG iterates them in YAML order, giving reproducible draws under the
-    // same random_seed regardless of channel layout.
+    // Sample each modem's actual crystal offset (truncated normal, σ =
+    // declared tolerance). Done after all modems are loaded so RNG draws are
+    // reproducible under a fixed random_seed regardless of channel layout.
     {
         std::mt19937_64 rng(cfg.random_seed);
         for (auto& mc : cfg.modems) {
@@ -259,7 +247,7 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
             }
         }
 
-        // --- mode + initial_range_m + geometry block (Session B) ---
+        // --- mode + initial_range_m + geometry block ---
         if (c["initial_range_m"]) {
             cc.initial_range_m = c["initial_range_m"].as<float>();
             if (cc.initial_range_m <= 0.0f) {
@@ -342,10 +330,9 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
         cc.saltwater        = cfg.environment.saltwater;
         cc.sound_speed_m_s  = cfg.environment.sound_speed_m_s;
 
-        // Inherit source modem's velocity/acceleration; clock offset is the
-        // *difference* between the two modems' sampled crystal offsets, so
-        // loopback (src == rx) is always 0 and any crystal-tolerance setting
-        // produces a non-zero relative offset between distinct modems.
+        // Inherit source modem's velocity/acceleration. Clock offset is the
+        // difference between the two modems' sampled crystal offsets, so
+        // loopback (src == rx) is always 0.
         const ModemConfig* src = nullptr;
         const ModemConfig* rx  = nullptr;
         for (const auto& mc : cfg.modems) {
@@ -361,10 +348,10 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
                                 - rx->actual_clock_offset_ppm;
         }
 
-        // Multipath taps (optional, static mode only — geometric mode rejects
-        // multipath_taps above and computes its taps from the scene).
+        // Multipath taps (static mode only; geometric mode computes taps
+        // from its scene at message start).
         if (cc.mode == ChannelMode::Geometric) {
-            // No-op: Channel populates taps_ from the scene at message start.
+            // Channel populates taps_ from the scene at message start.
         } else if (const YAML::Node& taps_node = c["multipath_taps"]) {
             if (!taps_node.IsSequence()) {
                 throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
@@ -405,7 +392,7 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
                                         "the earliest tap should have delay_s > 0");
             }
         } else if (cc.direct_los) {
-            // If no taps specified and LOS exists, add a single direct-path tap
+            // No taps specified, LOS exists: insert a single direct-path tap.
             cc.multipath_taps.push_back({0.0f, 1.0f, 0.0f});
         } else {
             throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
@@ -423,10 +410,10 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
             cfg.noise.wenz_sea_state = noise_node["wenz_sea_state"].as<int>();
         if (noise_node["level_above_noise_floor_db"]) {
             throw ScenarioLoadError(source +
-                ": noise.level_above_noise_floor_db is no longer accepted — "
-                "use noise.min_margin_above_afe_db (default 10 dB) to set the "
-                "PSD margin above the modem's AFE noise floor, or "
-                "noise.disable: true to short-circuit ambient noise.");
+                ": noise.level_above_noise_floor_db is not accepted — use "
+                "noise.min_margin_above_afe_db (default 10 dB) for the PSD "
+                "margin above the AFE noise floor, or noise.disable: true to "
+                "short-circuit ambient noise.");
         }
         if (noise_node["min_margin_above_afe_db"])
             cfg.noise.min_margin_above_afe_db =
@@ -468,10 +455,6 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
 }
 
 } // anonymous namespace
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 ScenarioConfig ScenarioLoader::load(const std::string& filepath) {
     YAML::Node root;

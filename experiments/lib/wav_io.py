@@ -1,9 +1,8 @@
-"""WAV read helpers.
+"""Tolerant WAV reader.
 
-The openCREST streaming writer leaves RIFF/data chunk sizes at 0 if it
-didn't close gracefully (e.g. SIGTERM / Ctrl-C). ``scripts/analyze_wav.py``
-already has a tolerant parser; this module re-implements the same logic
-here so the experiment harness doesn't have to import from ``scripts/``.
+The openCREST streaming writer leaves RIFF/data chunk sizes at 0 when it
+doesn't close gracefully (e.g. SIGTERM / Ctrl-C). This reader falls back
+to reading until EOF in that case.
 """
 from __future__ import annotations
 
@@ -23,11 +22,9 @@ class WavSamples:
 
 
 def read_wav(path: str | Path) -> WavSamples:
-    """Read ``path`` and return a :class:`WavSamples` with mono samples
-    coerced to ``float64`` in the range -1..+1.
-
-    Tolerant of headers where RIFF / data chunk sizes are 0 (interrupted
-    writer): falls back to reading until EOF.
+    """Read ``path`` and return a :class:`WavSamples` with samples coerced
+    to ``float64`` in the range -1..+1. Tolerant of zero-sized RIFF / data
+    chunks (falls back to reading until EOF).
     """
     p = Path(path)
     with p.open("rb") as f:

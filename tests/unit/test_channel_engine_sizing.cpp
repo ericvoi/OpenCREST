@@ -32,12 +32,7 @@ ScenarioConfig make_loopback(float range_m, float max_msg_dur_s) {
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // worst_case_pair_capacity must include the configured message duration.
-// Regression for the loopback truncation bug where a hard-coded 1 s slack
-// produced a 2.097 s power-of-2 capacity, silently dropping the tail of any
-// message longer than ~2.1 s.
-// ---------------------------------------------------------------------------
 
 TEST(ChannelEngineSizing, IncludesMaxMessageDuration) {
     constexpr uint32_t kFs = 500'000;
@@ -79,19 +74,13 @@ TEST(ChannelEngineSizing, ZeroOrNegativeFallsBackToTenSeconds) {
     EXPECT_GE(cap, base_delay + multipath + in_flight);
 }
 
-// ---------------------------------------------------------------------------
-// Direct check: the bug's exact numerical signature must no longer appear.
-// Old behavior: 150 m / 0.1 s base + 0.2 s multipath + 1.0 s slack = 650_000
-// raw → rounded to 2^20 = 1_048_576 = 2.097 s. With max_message_duration_s
-// = 3.0, capacity must be much larger (next power of 2 above 1.65M = 2^21).
-// ---------------------------------------------------------------------------
-
+// A 3 s message at 150 m loopback must exceed the 2^20 sample ceiling
+// (2.097 s) so the message tail isn't silently truncated.
 TEST(ChannelEngineSizing, RegressionLoopbackTruncationAt2_1Seconds) {
     constexpr uint32_t kFs = 500'000;
     const auto sc = make_loopback(/*range_m=*/150.0f, /*max_msg_dur_s=*/3.0f);
 
     const size_t cap = ChannelEngine::worst_case_pair_capacity(sc, kFs);
     EXPECT_GT(cap, static_cast<size_t>(1'048'576))
-        << "Pair buffer capacity must exceed the old 2^20 ceiling that "
-           "caused the 2.1 s loopback truncation.";
+        << "Pair buffer capacity must exceed the 2^20 ceiling.";
 }

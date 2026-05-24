@@ -7,7 +7,7 @@
 
 namespace {
 
-// Global pointer so the signal handler can call stop()
+// Signal handler reaches the simulator through this pointer.
 openCREST::Simulator* g_simulator = nullptr;
 std::atomic<bool>     g_stop_requested{false};
 
@@ -34,7 +34,6 @@ int main(int argc, char* argv[]) {
 
     const std::string scenario_path = argv[1];
 
-    // Install signal handlers for clean shutdown
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
 

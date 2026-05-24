@@ -6,7 +6,6 @@
 namespace openCREST {
 
 ModemRegistry::ModemRegistry() {
-    // Default factory: create a real USB transport
     transport_factory = [](const std::string& modem_id) -> std::unique_ptr<IModemTransport> {
         (void)modem_id;
         return std::make_unique<UsbTransport>();

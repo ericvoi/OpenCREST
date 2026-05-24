@@ -49,35 +49,29 @@ void ClockFillTracker::on_status(const protocol::StatusPayload& status,
         anchor_cumulative_samples_ = entry->cumulative_after;
         last_anchor_was_fallback_  = false;
     } else {
-        // Fallback: anchor at status-arrival time using the current
-        // cumulative-sent count. Less accurate (loses the ~τ_usb
-        // anchoring) but keeps the tracker functional.
+        // Fallback when fill_reference_id isn't in the ring: anchor at
+        // status-arrival time. Less accurate but keeps the tracker
+        // functional; the following rate inference is skipped because
+        // anchor times mix host-send and status-arrival epochs.
         anchor_fill_samples_       = static_cast<int64_t>(status.buffer_fill);
         anchor_time_               = now;
         anchor_cumulative_samples_ = cumulative_samples_sent_;
         last_anchor_was_fallback_  = true;
         ++fallback_anchor_count_;
-        // Don't trust the next rate inference either — anchor times
-        // mix host-send and status-arrival epochs.
         skip_next_rate_inference_  = true;
     }
     has_anchor_ = true;
 
-    // EWMA rate inference between consecutive anchors. Use the modem's
-    // accepted-packet count (delta of rx_expected_id × samples_per_pkt),
-    // not host-sent samples. During burst-mode recovery the modem may
-    // reject some packets when the USB-RX pipeline can't keep up; using
-    // host-sent samples would attribute those drops to the modem's DAC,
-    // biasing the observed rate upward and poisoning the EWMA into a
-    // self-reinforcing 1.5× burst loop.
+    // EWMA rate inference between consecutive anchors. Counts modem-
+    // accepted packets (delta of rx_expected_id × samples_per_pkt), not
+    // host-sent samples — otherwise dropped packets would bias the
+    // observed rate upward into a self-reinforcing burst loop.
     if (prev_has && prev_rx_valid && !skip_next_rate_inference_) {
         const auto dt = anchor_time_ - prev_t;
         const double dt_seconds =
             std::chrono::duration<double>(dt).count();
         if (dt_seconds > 0) {
             // 16-bit subtract handles the modem's rx_expected_id wrap.
-            // Typical status cadence yields ~tens of packets between
-            // anchors — well within int16_t range.
             const int16_t accepted_pkts = static_cast<int16_t>(
                 status.rx_expected_id - prev_rx_expected);
             if (accepted_pkts > 0) {
@@ -86,16 +80,13 @@ void ClockFillTracker::on_status(const protocol::StatusPayload& status,
                     static_cast<int64_t>(cfg_.samples_per_packet);
                 const int64_t fill_delta =
                     anchor_fill_samples_ - prev_fill;
-                // consumed = accepted − fill_change (positive when
-                // modem ate more than it accepted from us).
+                // consumed = accepted − fill_change.
                 const int64_t consumed = accepted_samples - fill_delta;
                 if (consumed > 0) {
                     const double observed_rate =
                         static_cast<double>(consumed) / dt_seconds;
-                    // Sanity bound the observation before mixing it in.
-                    // A rate >2× or <0.5× nominal is almost certainly
-                    // bad data (status anomaly, USB stall, or stale
-                    // anchor); skip the mix in that case.
+                    // Reject observations outside [0.5×, 2×] nominal as
+                    // status anomalies / stale anchors.
                     const double nominal =
                         static_cast<double>(cfg_.dac_rate);
                     if (observed_rate > nominal * 0.5 &&
@@ -152,33 +143,16 @@ bool ClockFillTracker::should_send(time_point now) {
 
     const int64_t fill = extrapolated_fill(now);
 
-    // Two-signal hold decision:
-    //
-    // Use extrapolation by default (smooth, sub-millisecond resolution,
-    // gives the bang-bang pacing the system was tuned for in steady
-    // state). Switch to the modem-reported anchor only when extrap and
-    // anchor disagree by more than half the target fill — that's the
-    // fingerprint of modem_rate_ having drifted from actual HilBuf drain
-    // rate (e.g., MESS PROCESSING starves HilStream_DacCallback during
-    // decode). Anchor-only hysteresis on its own oscillates wildly
-    // because anchor updates are bursty and discretized.
-    //
-    // Anchor staleness is NOT used to switch back to extrap during hold:
-    // a stale anchor that was last reported HIGH almost certainly means
-    // the modem is overflowing and silently rejecting our packets
-    // (firmware only emits status from HilBuf_ReadRxPackets on accepted
-    // packets — hil_buffer.c:357). Trusting extrap in that case caused
-    // the overflow loop: extrap drops to 0 within ~34 ms of any high
-    // anchor (because modem_rate_ is wrong), hold releases, host bursts
-    // into a full buffer, modem still doesn't ack, anchor stays stale,
-    // repeat.
-    //
-    // The keepalive trickle below is what breaks the deadlock instead:
-    // one packet every KEEPALIVE_INTERVAL during hold, which (a) eventually
-    // gets accepted once the modem's DAC drains enough to make room, (b)
-    // that acceptance fires a status response, (c) which refreshes the
-    // anchor with ground truth, and (d) anchor-driven release takes
-    // over from there.
+    // Two-signal hold decision: default to extrapolation (smooth, sub-ms
+    // resolution); switch to the anchor when they disagree by more than
+    // half the target fill — that's the fingerprint of modem_rate_
+    // having drifted from the actual drain rate. Anchor staleness is
+    // deliberately NOT used to switch back to extrap during hold: a
+    // stale-high anchor means the modem is rejecting our packets, and
+    // trusting extrap there produces an overflow loop. The keepalive
+    // trickle below is what breaks the deadlock — one packet every
+    // KEEPALIVE_INTERVAL eventually gets accepted, refreshing the
+    // anchor with ground truth.
     const int64_t disagreement_threshold =
         static_cast<int64_t>(target_fill_samples_ / 2);
     const int64_t disagreement = has_anchor_
@@ -197,10 +171,10 @@ bool ClockFillTracker::should_send(time_point now) {
     }
 
     if (holding_) {
-        // Keepalive trickle. See the comment block above for the rationale.
-        // 50 ms × 256 samples ≈ 5 k samples/s — three orders of magnitude
-        // below modem drain (~500 k samples/s), so the trickle can't keep
-        // a full buffer full, only prevent the host from going silent.
+        // Keepalive trickle (see hold-decision comment above). 50 ms ×
+        // 256 samples ≈ 5 k samples/s — well below drain (~500 k), so
+        // the trickle can't keep a full buffer full, only prevent the
+        // host from going silent.
         constexpr auto KEEPALIVE_INTERVAL = std::chrono::milliseconds(50);
         if (now - last_send_time_ < KEEPALIVE_INTERVAL) return false;
         last_send_time_ = now;
@@ -209,8 +183,8 @@ bool ClockFillTracker::should_send(time_point now) {
 
     if (now < next_send_time_) return false;
 
-    // Choose period based on how badly we're below target:
-    //   < target - hyst_low_samples_ → burst rate (1 / max_rate)
+    // Choose period based on how far below target we are:
+    //   < target - hyst_low_samples_ → burst rate
     //   otherwise                    → nominal rate
     const bool deeply_low = fill < static_cast<int64_t>(target_fill_samples_) -
                                     static_cast<int64_t>(hyst_low_samples_);
@@ -220,9 +194,7 @@ bool ClockFillTracker::should_send(time_point now) {
     const auto period = std::chrono::duration_cast<time_point::duration>(
         std::chrono::duration<double>(1.0 / rate));
     next_send_time_ += period;
-    // Bounded catch-up: don't allow more than MAX_CATCHUP_SLOTS of
-    // backlog to be redeemed back-to-back (mirrors BufferPacer's
-    // 3-slot precedent).
+    // Bounded catch-up after an I/O stall.
     constexpr int MAX_CATCHUP_SLOTS = 3;
     if (now - next_send_time_ > period * MAX_CATCHUP_SLOTS) {
         next_send_time_ = now + period;
@@ -232,9 +204,8 @@ bool ClockFillTracker::should_send(time_point now) {
 }
 
 void ClockFillTracker::reset() {
-    // Clear anchor + ring + cumulative + schedule. Preserve the
-    // smoothed modem_rate_ (hardware constant — re-learning it every
-    // state transition would waste a per-cycle anchor pair).
+    // Clear anchor + ring + cumulative + schedule. The smoothed
+    // modem_rate_ is preserved across resets (hardware constant).
     has_anchor_                = false;
     anchor_fill_samples_       = 0;
     anchor_time_               = {};
@@ -247,9 +218,7 @@ void ClockFillTracker::reset() {
 
     cumulative_samples_sent_ = 0;
 
-    // Modem resets its rx_expected_id on every state transition; the
-    // tracker mirrors that here so post-reset deltas start from a known
-    // baseline rather than carrying stale data across RX sessions.
+    // Mirror the firmware's per-state-transition rx_expected_id reset.
     prev_rx_expected_id_       = 0;
     prev_rx_expected_id_valid_ = false;
 

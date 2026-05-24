@@ -5,24 +5,24 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(OPENCRIEST_BUILD_TESTS  "Build unit and integration tests"          ON)
-option(OPENCRIEST_ASAN         "Enable AddressSanitizer"                   OFF)
-option(OPENCRIEST_TSAN         "Enable ThreadSanitizer"                    OFF)
+option(OPENCREST_BUILD_TESTS  "Build unit and integration tests"          ON)
+option(OPENCREST_ASAN         "Enable AddressSanitizer"                   OFF)
+option(OPENCREST_TSAN         "Enable ThreadSanitizer"                    OFF)
 option(OPENCREST_DEBUG_TALLY   "Enable per-tick sample tally diagnostics in ChannelEngine" OFF)
-option(OPENCRIEST_USE_CLOCK_FILL_TRACKER
+option(OPENCREST_USE_CLOCK_FILL_TRACKER
        "Use clock-extrapolation buffer-fill tracker + arrival-alignment instead of PID"
        ON)
 
-if(OPENCRIEST_ASAN AND OPENCRIEST_TSAN)
-    message(FATAL_ERROR "OPENCRIEST_ASAN and OPENCRIEST_TSAN cannot both be enabled simultaneously")
+if(OPENCREST_ASAN AND OPENCREST_TSAN)
+    message(FATAL_ERROR "OPENCREST_ASAN and OPENCREST_TSAN cannot both be enabled simultaneously")
 endif()
 
-if(OPENCRIEST_ASAN)
+if(OPENCREST_ASAN)
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address)
 endif()
 
-if(OPENCRIEST_TSAN)
+if(OPENCREST_TSAN)
     add_compile_options(-fsanitize=thread)
     add_link_options(-fsanitize=thread)
 endif()
@@ -83,9 +83,9 @@ target_compile_options(openCREST_core PRIVATE -Wall -Wextra -Wpedantic)
 if(OPENCREST_DEBUG_TALLY)
     target_compile_definitions(openCREST_core PUBLIC OPENCREST_DEBUG_TALLY)
 endif()
-if(OPENCRIEST_USE_CLOCK_FILL_TRACKER)
+if(OPENCREST_USE_CLOCK_FILL_TRACKER)
     target_compile_definitions(openCREST_core
-        PUBLIC OPENCRIEST_USE_CLOCK_FILL_TRACKER)
+        PUBLIC OPENCREST_USE_CLOCK_FILL_TRACKER)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-if(OPENCRIEST_BUILD_TESTS)
+if(OPENCREST_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

@@ -1,13 +1,9 @@
-"""Smoke tests for the analytical method-of-images path delays.
+"""Tests for the analytical method-of-images path delays.
 
-Cross-checks against:
-* Hand-computed slant ranges for the paper geometry
-  (D=120, z_s=50, z_r=100).
-* The C++ ``GeometricScene`` unit tests in
-  ``tests/unit/test_geometric_scene.cpp`` use identical formulas — these
-  Python tests assert the same closed-form values without spawning a
-  subprocess. The C++ side is the ground truth; if either drifts, the
-  C++ tests will tell us first.
+Cross-checks against hand-computed slant ranges for the shallow-water
+reference geometry (D=120, z_s=50, z_r=100). The C++ ``GeometricScene``
+implementation is the ground truth; these Python tests assert the same
+closed-form values without spawning a subprocess.
 """
 from __future__ import annotations
 
@@ -37,8 +33,8 @@ def test_direct_excess_is_zero() -> None:
 
 
 def test_surface_is_longer_path_than_bottom_for_paper_geometry() -> None:
-    """With z_s=50, z_r=100, D=120: dz_surface = 150 > dz_bottom = 90, so
-    the surface bounce always arrives after the bottom bounce."""
+    """For z_s=50, z_r=100, D=120 the surface dz=150 > bottom dz=90, so the
+    surface bounce always arrives after the bottom bounce."""
     for R in (200.0, 500.0, 1000.0):
         taps = analytical_taps(R, **GEOM)
         bottom = next(t for t in taps if t.name == "bottom").excess_delay_samples
@@ -62,8 +58,8 @@ def test_excess_delay_samples_match_handcomputed_R_500() -> None:
 
 
 def test_ordering_is_by_increasing_delay() -> None:
-    """``analytical_taps`` returns increasing-delay order regardless of
-    the input path tuple."""
+    """``analytical_taps`` returns increasing-delay order regardless of the
+    input path tuple."""
     for R in (200.0, 1000.0):
         taps = analytical_taps(R, paths=("surface", "direct", "bottom"), **GEOM)
         samples = [t.excess_delay_samples for t in taps]

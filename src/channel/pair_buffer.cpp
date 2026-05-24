@@ -29,28 +29,19 @@ PairBuffer::PairBuffer(size_t capacity, size_t base_delay_samples)
     std::memset(buffer_.get(), 0, capacity_ * sizeof(float));
 }
 
-// ---------------------------------------------------------------------------
-// Producer API
-// ---------------------------------------------------------------------------
-
 void PairBuffer::begin_message(size_t inter_message_gap_samples,
                                 bool   absolute_first_origin) {
     if (first_message_ && !absolute_first_origin) {
-        // Legacy / PID-mode default: first message lands at base_delay so
-        // the reader sees base_delay zeros before the message's sample 0.
+        // PID-mode default: first message lands at base_delay so the
+        // reader sees base_delay zeros before the message's sample 0.
         write_origin_ = base_delay_samples_;
         first_message_ = false;
         return;
     }
-    // Unified path (clock-tracker arrival-alignment mode, or any subsequent
-    // message): write_origin = prior_watermark + inter_message_gap_samples.
-    // For the first message under absolute_first_origin=true, prior_watermark
-    // == 0, so write_origin equals the caller-supplied gap. The caller has
-    // already incorporated propagation delay into the gap (e.g. via
-    // compute_arrival_aligned_gap), so the buffer must NOT auto-add base_delay
-    // again — doing so was the source of the one-shot ~25 m ranging bias on
-    // the first ranging after simulator restart, since the receiver-modem's
-    // pre-fill backlog (~F_B samples) leaked through unaccounted-for.
+    // Unified path. For first message with absolute_first_origin=true,
+    // prior_watermark==0 so write_origin == caller's gap. Caller has
+    // already folded propagation delay into the gap; the buffer must NOT
+    // auto-add base_delay again or it would double-shift.
     const size_t prior_watermark =
         write_watermark_.load(std::memory_order_relaxed);
     write_origin_   = prior_watermark + inter_message_gap_samples;
@@ -65,16 +56,14 @@ void PairBuffer::scatter_add(size_t offset_samples,
     const size_t abs_start = write_origin_ + offset_samples;
     const size_t abs_end   = abs_start + count;
 
-    // Overflow check against the consumer's read position. Producer's view
-    // of read_pos is always <= the actual current read_pos (acquire on a
-    // monotonically-advancing release store), so a stale view is conservative
-    // and safe.
+    // Producer's view of read_pos is always <= the true value (acquire on
+    // a monotonically-advancing release store), so a stale view is
+    // conservative.
     const size_t read_pos = read_pos_.load(std::memory_order_acquire);
     const size_t max_writable_end = read_pos + capacity_;
 
     size_t to_write = count;
     if (abs_start >= max_writable_end) {
-        // Entire write region is past the live window — drop all.
         overflow_drops_.fetch_add(count, std::memory_order_relaxed);
         return;
     }
@@ -84,8 +73,7 @@ void PairBuffer::scatter_add(size_t offset_samples,
         to_write = max_writable_end - abs_start;
     }
 
-    // Accumulate. Buffer slots reached here are guaranteed zero either from
-    // initial allocation or from read_advance() zeroing on the consumer side.
+    // Slots reached here are zero (from initial allocation or read_advance).
     for (size_t i = 0; i < to_write; ++i) {
         buffer_[(abs_start + i) & mask_] += samples[i];
     }
@@ -93,7 +81,7 @@ void PairBuffer::scatter_add(size_t offset_samples,
 
 void PairBuffer::commit_source_progress(size_t source_samples_processed) {
     const size_t new_watermark = write_origin_ + source_samples_processed;
-    // write_watermark_ is producer-only-written, so relaxed-load is fine.
+    // Producer-only-written; relaxed-load is fine.
     const size_t cur = write_watermark_.load(std::memory_order_relaxed);
     if (new_watermark > cur) {
         write_watermark_.store(new_watermark, std::memory_order_release);
@@ -106,10 +94,6 @@ void PairBuffer::commit_extra(size_t extra_samples) {
     write_watermark_.store(cur + extra_samples, std::memory_order_release);
 }
 
-// ---------------------------------------------------------------------------
-// Consumer API
-// ---------------------------------------------------------------------------
-
 size_t PairBuffer::read_advance(float* out, size_t count) {
     const size_t read_pos       = read_pos_.load(std::memory_order_relaxed);
     const size_t write_watermark = write_watermark_.load(std::memory_order_acquire);
@@ -121,8 +105,8 @@ size_t PairBuffer::read_advance(float* out, size_t count) {
     for (size_t i = 0; i < to_read; ++i) {
         const size_t slot = (read_pos + i) & mask_;
         out[i] = buffer_[slot];
-        // Zero the slot so the producer's next scatter_add (after wrap)
-        // accumulates from a clean slate.
+        // Zero so the producer's next scatter_add (after wrap) accumulates
+        // from a clean slate.
         buffer_[slot] = 0.0f;
     }
 
@@ -131,10 +115,6 @@ size_t PairBuffer::read_advance(float* out, size_t count) {
     }
     return to_read;
 }
-
-// ---------------------------------------------------------------------------
-// Diagnostics
-// ---------------------------------------------------------------------------
 
 size_t PairBuffer::available_read() const {
     const size_t rp = read_pos_.load(std::memory_order_acquire);

@@ -1,17 +1,9 @@
 """Tests for the CDC console driver.
 
-These exercise the contract documented in
-``docs/paper_experiments/session_e_experiment_harness.md`` plus the
-firmware menu vocabulary the user nailed down:
-
-* digits + newline navigates forward
-* ESC backs out one level
-* The task-level helpers issue the documented keystroke sequence for
-  chirp / ranging / text-message
-* The reader thread picks up new lines as they arrive over the (fake)
-  serial backend and writes them to the per-modem CDC log with monotonic
-  timestamps
-* udev TTY resolution finds the right device by USB serial
+Covers the firmware menu contract (digits + newline navigates forward,
+ESC backs out one level), the task-level helpers' keystroke sequences,
+the reader thread's line capture and per-modem log timestamping, and
+udev TTY resolution by USB serial.
 """
 from __future__ import annotations
 
@@ -53,7 +45,7 @@ def test_reader_captures_appended_lines(tmp_path: Path) -> None:
 
     log_lines = _read_lines(tmp_path / "cdc.log")
     assert len(log_lines) == 2
-    # Each line prefixed with "[<ns> ns] <payload>"
+    # Each line prefixed with "[<ns> ns] <payload>".
     for ln in log_lines:
         assert re.match(r"^\[\d+ ns\] ", ln), f"unexpected log shape: {ln!r}"
     assert "Range: 487.20m" in log_lines[0]
@@ -118,7 +110,7 @@ def test_send_line_appends_terminator(tmp_path: Path) -> None:
 
 
 def test_send_ranging_request_sequence(tmp_path: Path) -> None:
-    """Per user spec: ESC ESC ESC ESC + "4" + "9" -> ranging request."""
+    """ESC*4 + "4" + "9" triggers a ranging request."""
     fake = FakeSerial()
     console = CdcConsole.attach_backend("modem_a", fake,
                                         log_path=tmp_path / "cdc.log")
@@ -194,6 +186,50 @@ def test_send_janus_011_01_tx_sequence(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# verify_main_menu — modem responsiveness check
+# ---------------------------------------------------------------------------
+
+def test_verify_main_menu_returns_true_when_modem_echoes(tmp_path: Path) -> None:
+    fake = FakeSerial()
+    console = CdcConsole.attach_backend("modem_b", fake,
+                                        log_path=tmp_path / "cdc.log")
+    try:
+        # Inject the canonical menu print sequence the firmware emits on
+        # ESC.
+        fake.inject("\r\nMain Menu\r\n1: CFG\r\n2: DBG\r\n")
+        assert console.verify_main_menu(timeout_s=2.0) is True
+    finally:
+        console.detach()
+    # Verify 4 ESCs were written to the modem.
+    assert bytes(fake.written) == b"\x1b\x1b\x1b\x1b"
+
+
+def test_verify_main_menu_returns_false_on_silent_modem(tmp_path: Path) -> None:
+    fake = FakeSerial()
+    console = CdcConsole.attach_backend("modem_b", fake,
+                                        log_path=tmp_path / "cdc.log")
+    try:
+        # No injection => no bytes => expect_line times out.
+        assert console.verify_main_menu(timeout_s=0.3) is False
+    finally:
+        console.detach()
+
+
+def test_verify_main_menu_ignores_stale_pre_esc_lines(tmp_path: Path) -> None:
+    """``verify_main_menu`` is a fresh ping, not a history scan: a 'Main
+    Menu' line that arrived before the call must not satisfy the check."""
+    fake = FakeSerial()
+    console = CdcConsole.attach_backend("modem_b", fake,
+                                        log_path=tmp_path / "cdc.log")
+    try:
+        fake.inject("\r\nMain Menu\r\n1: CFG\r\n")
+        time.sleep(0.1)        # let reader consume it
+        assert console.verify_main_menu(timeout_s=0.3) is False
+    finally:
+        console.detach()
+
+
+# ---------------------------------------------------------------------------
 # udev TTY resolution
 # ---------------------------------------------------------------------------
 
@@ -253,14 +289,13 @@ def test_find_tty_by_serial_picks_correct_modem(tmp_path: Path) -> None:
         leaf = dev_node / "iface"
         leaf.mkdir()
         os.symlink(leaf, sysfs / tty)
-        # Make the link's child "device" point back to the serial-bearing dir
-        # by overlaying: we treat the symlink target as the device.
-        # The walk in find_tty_by_serial expects (tty_dir / 'device'), so add it:
+        # find_tty_by_serial expects (tty_dir / 'device'); rebuild the
+        # scaffold so the lookup walks through the serial-bearing dir.
         (sysfs / tty).rename(sysfs / (tty + ".tmp"))
         actual_tty = sysfs / tty
         actual_tty.mkdir()
         os.symlink(leaf, actual_tty / "device")
-        (sysfs / (tty + ".tmp")).unlink()      # clean up scaffold
+        (sysfs / (tty + ".tmp")).unlink()
         (devroot / tty).write_bytes(b"")
 
     found1 = find_tty_by_serial("OA-2-1", sys_class_tty=sysfs, dev_root=devroot)

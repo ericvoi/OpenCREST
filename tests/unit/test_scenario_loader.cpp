@@ -103,8 +103,8 @@ channels:
     EXPECT_FALSE(cfg.channels[0].saltwater);
 }
 
-// Legacy environment.center_freq_khz key must be rejected with a clear
-// migration message — the scenario writer is otherwise silently ignored.
+// Legacy environment.center_freq_khz key is rejected with a migration
+// message — the scenario writer is otherwise silently ignored.
 TEST(ScenarioLoader, LegacyEnvironmentCenterFreqKeyRejected) {
     const char* yaml = R"yaml(
 name: legacy_fc
@@ -765,7 +765,6 @@ channels:
 // ---------------------------------------------------------------------------
 
 TEST(ScenarioLoader, ClockOffsetZeroToleranceProducesZeroActual) {
-    // Default behavior — unchanged from pre-distribution implementation.
     const char* yaml = R"yaml(
 name: zero_tol
 transducers:
@@ -781,8 +780,8 @@ channels:
     range_m: 100.0
 )yaml";
     const auto cfg = ScenarioLoader::load_from_string(yaml);
-    EXPECT_FLOAT_EQ(cfg.modems[0].clock_offset_ppm, 0.0f);          // tolerance preserved
-    EXPECT_FLOAT_EQ(cfg.modems[0].actual_clock_offset_ppm, 0.0f);    // no draw
+    EXPECT_FLOAT_EQ(cfg.modems[0].clock_offset_ppm, 0.0f);
+    EXPECT_FLOAT_EQ(cfg.modems[0].actual_clock_offset_ppm, 0.0f);
     EXPECT_FLOAT_EQ(cfg.channels[0].clock_offset_ppm, 0.0f);
 }
 
@@ -860,7 +859,7 @@ channels:
 }
 
 TEST(ScenarioLoader, ClockOffsetTwoModemsDrawIndependently) {
-    // Two modems with identical tolerance must get distinct actual draws.
+    // Two modems with identical tolerance get distinct actual draws.
     const char* yaml = R"yaml(
 name: pair
 random_seed: 7
@@ -913,14 +912,13 @@ channels:
     const float b = cfg.modems[1].actual_clock_offset_ppm;
     EXPECT_FLOAT_EQ(cfg.channels[0].clock_offset_ppm, a - b);
     EXPECT_FLOAT_EQ(cfg.channels[1].clock_offset_ppm, b - a);
-    // Reciprocal channels carry equal-magnitude, opposite-sign offsets — a
-    // sanity check on the sign convention.
+    // Reciprocal channels carry equal-magnitude, opposite-sign offsets.
     EXPECT_FLOAT_EQ(cfg.channels[0].clock_offset_ppm,
                     -cfg.channels[1].clock_offset_ppm);
 }
 
 TEST(ScenarioLoader, LoopbackChannelClockOffsetIsZero) {
-    // Even with a non-zero tolerance, src == rx ⇒ effective offset = 0.
+    // src == rx ⇒ effective offset = 0 regardless of tolerance.
     const char* yaml = R"yaml(
 name: loop
 random_seed: 1
@@ -937,8 +935,8 @@ channels:
     range_m: 100.0
 )yaml";
     const auto cfg = ScenarioLoader::load_from_string(yaml);
-    EXPECT_NE(cfg.modems[0].actual_clock_offset_ppm, 0.0f);  // draw is non-zero
-    EXPECT_FLOAT_EQ(cfg.channels[0].clock_offset_ppm, 0.0f); // but channel sees 0
+    EXPECT_NE(cfg.modems[0].actual_clock_offset_ppm, 0.0f);
+    EXPECT_FLOAT_EQ(cfg.channels[0].clock_offset_ppm, 0.0f);
 }
 
 TEST(ScenarioLoader, NegativeClockOffsetToleranceThrows) {
@@ -1000,7 +998,7 @@ channels:
 }
 
 TEST(ScenarioLoader, RejectsModemTransducerIdMissing) {
-    // transducers block exists, but the modem omits transducer_id.
+    // transducers block present, modem omits transducer_id.
     const char* yaml = R"yaml(
 name: bad_modem
 transducers:
@@ -1019,7 +1017,7 @@ channels:
 }
 
 TEST(ScenarioLoader, RejectsModemTransducerIdUnknown) {
-    // modem references an id that is not in the transducers block.
+    // Modem references an id not in the transducers block.
     const char* yaml = R"yaml(
 name: bad_modem
 transducers:
@@ -1039,7 +1037,7 @@ channels:
 }
 
 TEST(ScenarioLoader, RejectsTransducerEntryMissingTvrOrRvr) {
-    // transducer T-001 lacks rvr_db.
+    // T-001 lacks rvr_db.
     const char* yaml = R"yaml(
 name: bad_tx
 transducers:
@@ -1058,11 +1056,11 @@ channels:
 }
 
 // ---------------------------------------------------------------------------
-// Geometric channel mode (Session B)
+// Geometric channel mode
 // ---------------------------------------------------------------------------
 
 TEST(ScenarioLoader, StaticModeIsDefault) {
-    // Without an explicit `mode:` field the channel must come back as Static.
+    // No explicit `mode:` field → channel is Static.
     const auto cfg = ScenarioLoader::load_from_string(kMinimalYaml);
     EXPECT_EQ(cfg.channels[0].mode, ChannelMode::Static);
 }
@@ -1240,7 +1238,7 @@ channels:
 }
 
 TEST(ScenarioLoader, GeometricChannelInvalidDepthsThrows) {
-    // source_depth >= water_depth — geometrically nonsense.
+    // source_depth >= water_depth.
     const char* yaml = R"yaml(
 name: geom_bad_depths
 transducers:
@@ -1263,7 +1261,7 @@ channels:
 }
 
 TEST(ScenarioLoader, GeometricChannelInvalidRangeEnvelopeThrows) {
-    // r_min_m >= initial_range_m — R_0 wouldn't be inside the envelope.
+    // r_min_m >= initial_range_m → R_0 outside the envelope.
     const char* yaml = R"yaml(
 name: geom_bad_env
 transducers:

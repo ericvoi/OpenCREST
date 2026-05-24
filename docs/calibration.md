@@ -23,12 +23,12 @@ bytes, packed little-endian).
 | `type` | `uint8_t` | — | Payload-type discriminator (0x02) |
 | `adc_bits` | `uint8_t` | bits | Native ADC resolution; `samples_per_packet()` derives from this |
 | `dac_bits` | `uint8_t` | bits | Native DAC resolution |
-| `num_input_attenuations` | `uint8_t` | — | Always 2 in MVP |
-| `noise_floor_psd_counts_per_sqrt_hz` | `float` | counts/√Hz | AFE noise PSD at `center_freq_hz` (replaces the old RMS `noise_floor` field) |
+| `num_input_attenuations` | `uint8_t` | — | Always 2 |
+| `noise_floor_psd_counts_per_sqrt_hz` | `float` | counts/√Hz | AFE noise PSD at `center_freq_hz` |
 | `loopback_cal_attenuation` | `uint16_t` | — | Index of the `input_attenuation[]` pad active during the loopback gain measurement |
 | `loopback_gain` | `float` | linear, sample/sample | End-to-end DAC-sample → ADC-sample gain when looping the DAC back into the receive chain at `loopback_cal_attenuation` |
 | `adc_sampling_rate` | `uint32_t` | Hz | Typically 500 000 |
-| `dac_sampling_rate` | `uint32_t` | Hz | Typically 500 000; equal to ADC rate in MVP |
+| `dac_sampling_rate` | `uint32_t` | Hz | Typically 500 000; equal to ADC rate |
 | `input_attenuation[2]` | `float[2]` | dB | Voltage gain of each selectable RX-pad (negative for resistive dividers) |
 | `output_attenuation` | `float` | dB | Voltage gain of the TX-monitor tap (negative — pads the high-voltage drive down to ADC-safe levels) |
 | `center_freq_hz` | `float` | Hz | Modem operating center frequency (firmware authoritative) |
@@ -92,10 +92,7 @@ which point makes it obvious which physical measurement produces it.
 
 ## 3. Reference-frame discipline
 
-The biggest historical bug in this codebase was comparing AFE noise (DAC →
-ADC frame) with simulated noise (acoustic-pressure → preamp frame) and
-seeing the chain gain twice. The fix (2026-05-03) moved every PSD comparison
-to the **preamp input**:
+Every PSD comparison happens at the **preamp input**:
 
 ```
 preamp_dBV/√Hz = (noise PSD in dB re 1 µPa²/Hz) + RVR
@@ -168,9 +165,8 @@ debugging unexpected cal values.
 
 1. Boot the simulator with any single-modem loopback scenario. The startup
    log includes a per-channel `physical_gain_dB` line and any
-   `boost_db > 0` warning (see Phase C noise sizing). These two together
-   are a quick sanity check that the cal values produce a plausible chain
-   gain.
+   `boost_db > 0` warning. These two together are a quick sanity check
+   that the cal values produce a plausible chain gain.
 
 2. Run with `log_raw_tx: true` and `log_raw_rx: true` in the scenario's
    `logging:` block, then inspect the WAVs with `scripts/analyze_wav.py`:

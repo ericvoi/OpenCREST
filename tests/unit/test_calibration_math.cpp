@@ -197,8 +197,7 @@ TEST(CalibrationMath, PreampGainDbZeroLoopbackIsNan) {
 
 TEST(CalibrationMath, AfePsdAtPreampUnityPreampMatchesAdcInDbv) {
     // With preamp_gain_db = 0, the AFE at the preamp equals the AFE at the
-    // ADC (in dB(V), adjusting for V_ref_adc). Pin so the unity-chain
-    // legacy assumption matches the new computation when preamp_gain = 0.
+    // ADC (in dB(V), adjusting for V_ref_adc).
     auto c = make_realistic_cal();
     c.loopback_cal_attenuation = 0;
     c.loopback_gain            = std::pow(10.0f, c.input_attenuation[0] / 20.0f);
@@ -277,8 +276,8 @@ TEST(CalibrationMath, DacFromPreampOutOfRangeAttenIdxIsZeroPad) {
 }
 
 // Round-trip: preamp_dbv → dac_dbfs → physical voltage at DAC →
-// physical voltage at preamp → preamp_dbv. Pin so the inverse symmetry
-// of the input-pad un-do and V_ref_dac normalisation is preserved.
+// physical voltage at preamp → preamp_dbv. Verifies inverse symmetry
+// of the input-pad un-do and V_ref_dac normalisation.
 TEST(CalibrationMath, PreampDacRoundTrip) {
     auto c = make_realistic_cal();
     for (float preamp_dbv : {-200.0f, -160.0f, -120.0f, -80.0f}) {

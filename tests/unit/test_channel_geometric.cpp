@@ -28,10 +28,8 @@ namespace {
 constexpr uint32_t FS         = 500'000;
 constexpr float    SOUND      = 1500.0f;
 constexpr size_t   BIG_CAP    = 1u << 22;     // 4 Mi samples ≈ 8.4 s @ 500 kSPS
-                                              // — must fit base_delay (which
-                                              // anchors at r_min, up to ~330k
-                                              // samples for the test scenes)
-                                              // PLUS the message length.
+                                              // Must fit base_delay (anchored
+                                              // at r_min) plus the message.
 
 CalibrationData make_cal(float fc_hz = 25'000.0f) {
     CalibrationData c;
@@ -146,9 +144,8 @@ TEST(ChannelGeometric, MaxTapDeltaCoversEnvelope) {
 }
 
 TEST(ChannelGeometric, StaticModeBaseDelayUnchanged) {
-    // Belt-and-suspenders: building a static-mode Channel still produces
-    // base_delay = range_m / c (the geometric branch is only entered for
-    // mode == Geometric).
+    // Static-mode Channel still produces base_delay = range_m / c; the
+    // geometric branch is only entered for mode == Geometric.
     ChannelConfig cfg;
     cfg.from_modem        = "A";
     cfg.to_modem          = "A";

@@ -90,9 +90,8 @@ All stream directions are defined **from the modem's perspective**:
 ```
 
 - One USB cable per modem to the host PC.
-- Each modem should be on a **separate USB host controller** to avoid shared-bus contention and ensure independent, low-latency transfers.
-- MVP: 2 modems (2 USB ports on separate controllers).
-- Future: up to 6 modems. For more than 4, a USB hub may be required on some ports; bandwidth is not a concern (see §3.3), but latency impact of hubs should be characterized.
+- Each modem is on a **separate USB host controller** to avoid shared-bus contention and ensure independent, low-latency transfers.
+- Supports up to 2 modems on separate USB controllers.
 
 ### 3.3 Bandwidth
 
@@ -106,13 +105,12 @@ At the nominal sample rate of 500 kSPS:
 | USB HS practical bulk throughput | ~35 MB/s |
 | Streams per modem | 1 (half-duplex: TX or RX, never both) |
 | Headroom per USB link | > 30× |
-| 6 modems aggregate | 6 MB/s — well within a single USB controller, but separate controllers are used for latency |
 
-Bandwidth is not a limiting factor for USB HS at any planned modem count or sample rate.
+Bandwidth is not a limiting factor for USB HS at the supported modem count and sample rate.
 
 ### 3.4 Host PC Specifications
 
-| Parameter | MVP Specification |
+| Parameter | Specification |
 |---|---|
 | Processor | Intel Core i5 8th generation, desktop (6 cores, 6 threads) |
 | OS | Linux with low-latency kernel (PREEMPT) or RT kernel (PREEMPT_RT) |
@@ -242,7 +240,7 @@ Host                                    Modem
 | TX → SETTLING | Control packet reports SETTLING or TX data packets stop | Stop expecting TX data. Prepare RX stream for when modem returns to RX. |
 | SETTLING → IDLE/RX | Control packet reports RX state; 200 ms minimum has elapsed | Begin sending RX stream (signal + noise or noise only). |
 
-**MVP simplification:** The host detects TX start implicitly when TX data packets begin arriving on the data interface, confirmed by the modem state field in control packets. The transition to SETTLING/RX is detected similarly.
+The host detects TX start implicitly when TX data packets begin arriving on the data interface, confirmed by the modem state field in control packets. The transition to SETTLING/RX is detected similarly.
 
 ### 4.6 Half-Duplex Behavior
 
@@ -310,10 +308,10 @@ The host uses these values along with the scenario-defined path loss, TVR/RVR, a
 
 ### 5.4 Sample Rate
 
-| Parameter | MVP Value | Notes |
+| Parameter | Value | Notes |
 |---|---|---|
-| Nominal sample rate | 500 kSPS | ~50× the signal bandwidth (10 kHz); headroom allows future reduction |
-| ADC rate = DAC rate | Yes (MVP) | Different modems may differ in the future; handled via calibration |
+| Nominal sample rate | 500 kSPS | ~50× the signal bandwidth (10 kHz) |
+| ADC rate = DAC rate | Yes | Handled via calibration |
 | Minimum viable rate | ~100–200 kSPS | 10–20× bandwidth; reduces USB load and processing proportionally |
 
 The host uses the modem-reported `adc_sampling_rate` and `dac_sampling_rate` for all rate-dependent processing. The architecture is rate-agnostic.
@@ -324,7 +322,7 @@ The host uses the modem-reported `adc_sampling_rate` and `dac_sampling_rate` for
 
 ### 6.1 Processing Pipeline
 
-For each directed channel (source modem A → receiver modem B), the host applies the following processing chain. Steps marked **(post-MVP)** are omitted in the MVP.
+For each directed channel (source modem A → receiver modem B), the host applies the following processing chain.
 
 ```
 Modem A TX samples (uint16_t, 16-bit ADC)
@@ -336,42 +334,33 @@ Modem A TX samples (uint16_t, 16-bit ADC)
 [2] Scale by output_attenuation to recover drive voltage (relative)
     │
     ▼
-[3] (post-MVP) Voltage-to-current filter (transducer impedance model)
-    │
-    ▼
-[4] (post-MVP) Apply TVR (transmit voltage response → acoustic domain)
-    │
-    ▼
-[5] Doppler resampling (Farrow interpolator)
+[3] Doppler resampling (Farrow interpolator)
     │  Accounts for: clock offsets + radial velocity + acceleration
     │
     ▼
-[6] Multipath filter (complex tapped delay line)
+[4] Multipath filter (complex tapped delay line)
     │  Up to 10 taps, delays up to 200 ms
     │
     ▼
-[7] Frequency-dependent path loss (absorption + spreading)
+[5] Frequency-dependent path loss (absorption + spreading)
     │
     ▼
-[8] ──► Accumulate into Modem B's RX mix buffer ◄──  (other channels)
+[6] ──► Accumulate into Modem B's RX mix buffer ◄──  (other channels)
          │
          ▼
-    [9]  Add ambient noise (shaped: Wenz + tonal)
+    [7]  Add ambient noise (shaped: Wenz + tonal)
          │
          ▼
-    [10] (post-MVP) Apply RVR (receive voltage response → electrical domain)
+    [8]  Scale for input_attenuation
          │
          ▼
-    [11] Scale for input_attenuation
-         │
-         ▼
-    [12] Clip to DAC range, convert to uint16_t (12-bit)
+    [9]  Clip to DAC range, convert to uint16_t (12-bit)
          │
          ▼
     Send to Modem B as RX stream
 ```
 
-**MVP pipeline (steps 3, 4, 10 removed):**
+Summary form:
 
 ```
 TX samples → float → Doppler resample → multipath → path loss → sum → noise → scale → DAC → RX out
@@ -409,7 +398,7 @@ Where:
 
 #### 6.2.3 Acceleration
 
-MVP supports constant acceleration from message start:
+Constant acceleration from message start is supported:
 
 ```
 v_tx(t) = v_tx_0 + a_tx × t
@@ -428,16 +417,14 @@ A **4th-order (piecewise cubic) Farrow structure** performs the variable-rate re
 - Computational cost: approximately 5 multiply-accumulate operations per output sample
 - With acceleration, `r(t)` is updated per output sample as velocity changes linearly
 
-#### 6.2.5 Bulk vs. Per-Tap Doppler
+#### 6.2.5 Bulk Doppler
 
-**MVP: Bulk Doppler (single resampler per channel, applied before multipath filter).**
+A single resampler per channel is applied before the multipath filter.
 
 Rationale:
 - The Doppler difference between multipath taps due to different geometric path angles is proportional to `(v/c)(1 − cos Δθ)`. For `v = 3 m/s` and `Δθ = 30°`, this is `~2.6 × 10⁻⁴` or 0.026% — below the resolution of typical modem receivers and the simulator's other error sources.
 - Clock-offset Doppler (identical for all taps) typically dominates.
 - Bulk resampling uses one Farrow instance per channel vs. N instances for per-tap.
-
-**Post-MVP:** Per-tap Doppler can be enabled when Bellhop provides per-ray arrival angles and 3D velocity vectors are available. The architecture exposes the resampler as a callable stage that can be placed either before the multipath filter (bulk) or within each tap (per-tap).
 
 ### 6.3 Multipath
 
@@ -462,8 +449,6 @@ y[n] += tap.gain_linear × ( cos(tap.phase_rad) × x[n - delay_samples]
 
 Where `x̂` is the Hilbert transform of `x` (needed to apply a phase rotation to a real-valued passband signal). Alternatively, the phase shift can be applied as a fractional-sample delay offset within the Farrow interpolator for each tap, avoiding an explicit Hilbert transform.
 
-**Practical MVP simplification:** If micro-path phase effects are not critical for initial testing, taps can be applied as real-valued gains and the phase field zeroed. The data structure and processing pipeline should still support complex taps from the start to avoid refactoring.
-
 #### 6.3.2 Delay Line
 
 The multipath filter uses a **circular buffer** (tapped delay line):
@@ -476,17 +461,13 @@ The multipath filter uses a **circular buffer** (tapped delay line):
 | Number of taps | Configurable, default 10, compile-time max 32 |
 | Computation per output sample | 10 complex multiply-accumulates (negligible) |
 
-For N_modems = 6 (30 channels), total delay buffer memory: 30 × 400 KB = 12 MB. Trivial.
-
 #### 6.3.3 Multipath Tail After TX Ends
 
 When a modem finishes transmitting, the last TX samples remain in the delay line. **The host must continue reading out the multipath filter for up to `max_tap_delay` (200 ms) after the final TX sample enters the filter**, flushing the remaining multipath arrivals into the receiver's RX stream. During this tail period, the delay line input is zero (no new TX signal), and the output is the decaying arrivals of the last portion of the message plus ambient noise.
 
 #### 6.3.4 Tap Configuration
 
-MVP: Taps are statically defined in the scenario configuration file and remain fixed for the duration of the scenario.
-
-Post-MVP: Taps are computed by ray-tracing tools (e.g., Bellhop) and updated at a configurable rate (target: 20 ms update period, subject to computational feasibility). Tap interpolation between updates will be needed to prevent discontinuities.
+Taps are statically defined in the scenario configuration file and remain fixed for the duration of the scenario.
 
 ### 6.4 Path Loss
 
@@ -522,16 +503,9 @@ TL(R, f) = k × log₁₀(R) + α(f) × R / 1000    [dB]
 
 #### 6.4.4 Implementation
 
-For a wideband signal, path loss is frequency-dependent and must be applied as a **filter**, not a scalar gain. Implementation options:
-
-- **FIR filter** designed from the `TL(R, f)` response across the signal band (25–35 kHz). For moderate variation across the 10 kHz bandwidth, a short FIR (8–32 taps) suffices.
-- **MVP simplification**: If the path loss variation across the 10 kHz signal bandwidth is small (which it typically is for ranges < 5 km), a single scalar gain at the center frequency (30 kHz) can be used, deferring the filter implementation.
-
-In the MVP, each multipath tap can encode its own path-specific loss in `gain_linear`, so the path loss filter stage can be folded into the tap gains for static scenarios. A separate path loss filter becomes necessary when taps are updated dynamically (post-MVP Bellhop integration) and the scenario needs frequency-dependent loss beyond what tap gains encode.
+Each multipath tap encodes its own path-specific loss in `gain_linear`, so the path loss filter stage is folded into the tap gains for static scenarios. For a wideband signal where path loss varies significantly across the signal band (25–35 kHz), a short FIR filter (8–32 taps) designed from the `TL(R, f)` response can be applied; for ranges < 5 km where variation across the 10 kHz signal bandwidth is small, a single scalar gain at the center frequency (30 kHz) suffices.
 
 ### 6.5 Transducer Response (TVR / RVR)
-
-*Post-MVP for filtering. MVP provides data structures and configuration.*
 
 #### 6.5.1 TVR (Transmit Voltage Response)
 
@@ -560,12 +534,6 @@ transducer_models:
 
 Each modem in the scenario is assigned a transducer model. Different modems can use different transducers.
 
-**Post-MVP:** A parametric model (RLC equivalent circuit) can be used to generate the frequency response from component values, avoiding the need for measured lookup tables. The first modem's transducer equivalent circuit data is available for this purpose.
-
-#### 6.5.4 Voltage-to-Current Conversion (Post-MVP)
-
-The transducer's impedance model converts the captured drive voltage to the current actually flowing through the transducer, providing more realistic phase information. Implemented as a filter derived from the transducer equivalent circuit (RLC network → transfer function → IIR filter).
-
 ### 6.6 Ambient Noise
 
 #### 6.6.1 Spectral Model: Wenz Curves
@@ -587,7 +555,7 @@ For the 25–35 kHz signal band, the dominant ambient noise is **wind-driven sur
 2. Apply a **shaping filter** designed from the Wenz spectrum for the configured sea state and environment (shallow water, deep water, harbor, etc.).
 3. Scale the shaped noise so that its level at the modem's pre-amplifier input (after accounting for input attenuation) exceeds the modem-reported `noise_floor` by a configured margin.
 
-The noise shaping filter is a relatively short FIR or low-order IIR filter since the Wenz spectrum is smooth. It is designed once per scenario (sea state and environment are static in the MVP).
+The noise shaping filter is a relatively short FIR or low-order IIR filter since the Wenz spectrum is smooth. It is designed once per scenario; sea state and environment are static.
 
 #### 6.6.3 Narrowband Tonal Sources
 
@@ -606,11 +574,9 @@ noise:
       bandwidth_hz: 100
 ```
 
-MVP: Continuous tonal sources only. Post-MVP: Intermittent/transient sources (e.g., snapping shrimp: broadband impulses at random intervals) and directional noise.
-
 #### 6.6.4 Noise Injection Point
 
-Noise is added **after** all channel contributions are summed (step [9] in §6.1) and **before** the final DAC conversion. The noise is common to the receiver — all channels into a given modem share the same ambient noise floor. This is physically correct: ambient noise is a property of the receiver's environment, not of a specific source-receiver path.
+Noise is added **after** all channel contributions are summed (step [7] in §6.1) and **before** the final DAC conversion. The noise is common to the receiver — all channels into a given modem share the same ambient noise floor. This is physically correct: ambient noise is a property of the receiver's environment, not of a specific source-receiver path.
 
 ### 6.7 Signal Combination
 
@@ -620,9 +586,7 @@ When multiple modems transmit simultaneously (or their multipath tails overlap i
 RX_B[n] = Σ_A (channel_A→B[n]) + noise_B[n]
 ```
 
-For the MVP with 2 modems and no simultaneous TX, at most one channel contributes at a time (plus its multipath tail). The summing infrastructure is still implemented to support future multi-modem scenarios.
-
-**Saturation handling:** The modem provides two selectable input attenuation levels (30 dB apart). In scenarios where the summed signal could clip the 12-bit DAC range, the host can command the modem to switch to the higher attenuation setting. MVP does not implement automatic attenuation switching; clipping is accepted as unlikely in 2-modem scenarios.
+**Saturation handling:** The modem provides two selectable input attenuation levels (30 dB apart). In scenarios where the summed signal could clip the 12-bit DAC range, the host can command the modem to switch to the higher attenuation setting.
 
 ---
 
@@ -676,11 +640,9 @@ This 200 ms settling time is an important constraint for loopback mode (see §8)
 
 ### 7.4 Inter-Modem Time Alignment
 
-**MVP approach:** No explicit common time base between modems. The host uses **USB arrival time of the first TX data packet** as the reference time for a transmission. The host's system clock (monotonic, nanosecond resolution via `clock_gettime(CLOCK_MONOTONIC)`) provides the common time reference.
+No explicit common time base between modems is used. The host uses **USB arrival time of the first TX data packet** as the reference time for a transmission. The host's system clock (monotonic, nanosecond resolution via `clock_gettime(CLOCK_MONOTONIC)`) provides the common time reference.
 
 Accuracy: USB arrival time has jitter of ~1–3 ms. Given the 100 ms minimum propagation delay and typical message durations of 0.1–5 s, this jitter is acceptable. It introduces at most ~1–3 ms of timing uncertainty on the simulated propagation delay, which is well below perceptual or protocol-level significance.
-
-**Post-MVP:** For sub-millisecond time alignment (needed for precise TDOA testing or synchronized networks), the interrupt-based mechanism will be implemented: each modem drives a shared open-drain GPIO line to signal TX start. The host captures the interrupt timestamp and distributes precise timing information to all modems via control packets.
 
 ---
 
@@ -718,7 +680,7 @@ For single-modem testing, the host routes a modem's TX back to itself as RX:
 
 ### 9.1 Format
 
-Scenarios are defined in **YAML** files. The host application reads the scenario file at startup and configures all processing stages accordingly. Parameters are static for the duration of a scenario run (MVP).
+Scenarios are defined in **YAML** files. The host application reads the scenario file at startup and configures all processing stages accordingly. Parameters are static for the duration of a scenario run.
 
 ### 9.2 Scenario Structure
 
@@ -883,14 +845,9 @@ The host application is a **multithreaded C++20** command-line program running o
 |---|---|---|---|
 | **Main/Control** | Any | Scenario loading, modem lifecycle, coordination, CLI | 1 |
 | **USB I/O** | Pinned | Per-modem: reads TX packets, writes RX packets, reads control packets | 1 per modem |
-| **Channel Processing** | Pinned | Reads TX buffers, applies channel model, writes to RX buffers, generates noise | 1 (MVP) |
+| **Channel Processing** | Pinned | Reads TX buffers, applies channel model, writes to RX buffers, generates noise | 1 |
 
-**MVP: 4 threads** for 2 modems (1 main + 2 I/O + 1 processing).
-
-**Post-MVP scaling:** The channel processing thread becomes the bottleneck with more modems and complex channels. The architecture supports splitting into:
-- One processing thread per receiver (each receiver sums all incoming channels)
-- Or one processing thread per channel pair
-- Lock-free ring buffers between threads enable this decomposition without changing the I/O or control threads
+For 2 modems this totals 4 threads (1 main + 2 I/O + 1 processing).
 
 ### 10.3 Data Flow
 
@@ -959,7 +916,7 @@ The host logs raw streams to disk for post-analysis:
 
 WAV files use the modem-reported sample rate. File names include modem ID and timestamp. Logging runs in the main thread (or a dedicated low-priority thread) reading from the ring buffers, so it does not impact real-time processing.
 
-### 10.6 Live Metrics (Optional MVP)
+### 10.6 Live Metrics
 
 Printed to `stdout` or a status line at ~1 Hz:
 
@@ -968,109 +925,3 @@ Printed to `stdout` or a status line at ~1 Hz:
 - System: CPU utilization per pinned core
 
 ---
-
-## 11. MVP Scope
-
-### 11.1 Included in MVP
-
-| Feature | Details |
-|---|---|
-| Modem count | 2 modems + loopback mode (1 modem) |
-| Communication | USB HS, vendor bulk class |
-| Calibration exchange | Full calibration struct, requested at connection |
-| HIL streaming | Continuous RX (noise) to idle modems; TX capture during transmission |
-| Doppler | Bulk resampling per channel via Farrow interpolator; clock offsets + 1D radial velocity + constant acceleration |
-| Multipath | Complex tapped delay line, up to 10 taps (configurable, max 32), delays to 200 ms, static per scenario |
-| Multipath tail | Flushed for up to 200 ms after TX ends |
-| Path loss | Thorp absorption + selectable geometric spreading (spherical, cylindrical, hybrid) |
-| Ambient noise | Wenz-curve-shaped Gaussian noise + configurable continuous narrowband tonal sources |
-| Configuration | YAML scenario files |
-| Logging | Raw TX and RX streams to WAV or binary files |
-| Host OS | Linux with low-latency or RT kernel |
-| Language | C++20, multithreaded (1 main + 2 I/O + 1 processing) |
-
-### 11.2 Excluded from MVP (Post-MVP)
-
-| Feature | Priority | Notes |
-|---|---|---|
-| TVR/RVR filtering | High | Data structures in place; filter implementation deferred |
-| Voltage-to-current conversion | High | Requires transducer impedance model |
-| Simultaneous TX | High | Required for collision and multi-access protocol testing |
-| Ethernet transport | Medium | Architecture supports transport abstraction |
-| >2 modems (up to 6) | Medium | Threading and channel count scaling |
-| Interrupt-based TX detection | Medium | Sub-ms TX start timing for all connected modems |
-| 3D positions and velocity vectors | Medium | Replaces 1D radial model |
-| Dynamic multipath (Bellhop) | Medium | Taps updated at configurable rate (target 20 ms) |
-| Per-tap Doppler | Medium | Requires per-ray arrival angles from Bellhop |
-| Surface reverberation | Low | Additional noise/multipath component |
-| Directional noise | Low | Requires array processing model |
-| Intermittent/transient noise | Low | Snapping shrimp, impact noise |
-| Discontinuity prevention | Low | Smooth transitions on rapid tap changes or stop/start |
-| Offline simulation mode | Low | Process recorded files instead of live USB |
-| Python GUI front-end | Low | Scenario editor, live visualization |
-| Automatic attenuation switching | Low | Host commands modem to change RX attenuation based on signal level |
-
-### 11.3 MVP Constraints
-
-| Constraint | Value | Rationale |
-|---|---|---|
-| Minimum modem separation | 150 m (100 ms propagation) | System processing latency budget |
-| Maximum multipath delay | 200 ms | Delay buffer sizing |
-| Maximum multipath taps | 10 default, 32 compile-time max | Shallow water channel complexity |
-| Message duration | < 5 s typical | Buffer and timing assumptions |
-| TR switch settling | ≥ 200 ms | Hardware requirement |
-| End-to-end latency | < 100 ms | Must fit within minimum propagation delay |
-| ADC/DAC sample rate | Equal for both on a given modem (MVP) | Avoids additional resampling stage |
-| Modem count | 2 (or 1 in loopback) | USB port and processing thread count |
-| Scenarios | Static parameters for full run | No mid-run parameter changes |
-| No simultaneous TX | Simplifies state management and signal combination | |
-
-### 11.4 MVP Deliverables
-
-1. Host C++20 application (CLI) that:
-   - Discovers and calibrates connected modems over USB
-   - Loads YAML scenario files
-   - Enters HIL mode and runs the channel simulation in pseudo real-time
-   - Logs raw TX/RX streams to disk
-   - Optionally displays live metrics
-2. Example scenario YAML files (2-modem, loopback)
-3. Documentation: build instructions, scenario format reference, calibration procedure
-
----
-
-## 12. Post-MVP Roadmap
-
-Ordered by anticipated priority and dependency:
-
-```
-Phase 1: Foundation Extensions
-├── TVR/RVR filter application
-├── Voltage-to-current transducer model
-├── Simultaneous TX support (signal summation at receiver)
-└── >2 modem support (up to 6, threading scaling)
-
-Phase 2: Timing and Transport
-├── Interrupt-based TX detection (GPIO + timestamp distribution)
-├── Ethernet transport option
-└── Sub-ms inter-modem time alignment
-
-Phase 3: Advanced Channel
-├── 3D positions and velocity vectors
-├── Bellhop integration for dynamic multipath
-├── Per-tap Doppler (per-ray arrival angles)
-├── Dynamic tap update with interpolation (discontinuity prevention)
-└── Surface reverberation model
-
-Phase 4: Environment and Noise
-├── Directional noise model
-├── Intermittent/transient noise sources
-└── Environment builder (bathymetry, SSP)
-
-Phase 5: Tooling
-├── Offline simulation mode (file-based)
-├── Python GUI (scenario editor, live plots)
-└── Automated test sweep framework
-```
-
----
-

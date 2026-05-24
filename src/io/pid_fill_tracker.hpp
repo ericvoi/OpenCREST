@@ -4,11 +4,10 @@
 
 namespace openCREST {
 
-// IFillTracker implementation that delegates to the legacy BufferPacer
-// PI controller. Behavior is bit-for-bit identical to using BufferPacer
-// directly — this class exists only to fit BufferPacer behind the
-// IFillTracker interface so ModemIO can select between PID and
-// clock-extrapolation trackers at compile time.
+// IFillTracker adapter around the BufferPacer PI controller. Behavior
+// is bit-identical to using BufferPacer directly; the wrapper exists so
+// ModemIO can pick between PID and clock-extrapolation trackers at
+// compile time.
 class PidFillTracker final : public IFillTracker {
 public:
     PidFillTracker(uint32_t dac_rate, uint16_t buffer_capacity,

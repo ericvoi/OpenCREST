@@ -14,8 +14,7 @@ Variables:
   multipath_taps             (list of {delay_s, gain_db, phase_deg}, optional)
                                      defaults to the shallow-water 3-tap set
 
-The render is intentionally deterministic for a given parameter dict so the
-template test can golden-match byte-for-byte.
+Render is deterministic for a given parameter dict (golden-tested).
 -#}
 name: two_modem_base
 description: >

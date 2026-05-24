@@ -17,12 +17,11 @@ struct MessageEvent {
     uint64_t     sequence_id;   // host-assigned, monotonic per (modem, direction)
 };
 
-// One MessageEventLog per modem; the simulator opens one per source
-// modem and forwards events from SourceWorker on TX-entry / TX-exit
-// edges.
+// One MessageEventLog per source modem; SourceWorker forwards events on
+// TX-entry / TX-exit edges.
 //
-// JSONL output: one object per line, flushed on every record() so a
-// killed run still has up-to-the-last-message data.
+// JSONL output: one object per line, flushed on every record() so an
+// interrupted run still has up-to-the-last-message data.
 class MessageEventLog {
 public:
     MessageEventLog() = default;
@@ -31,12 +30,11 @@ public:
     MessageEventLog(const MessageEventLog&)            = delete;
     MessageEventLog& operator=(const MessageEventLog&) = delete;
 
-    // Open the JSONL file for append. Returns false on filesystem error;
-    // the caller may log and continue with logging disabled.
+    // Open the JSONL file. Returns false on filesystem error; caller may
+    // log and continue with logging disabled.
     bool open(const std::string& path);
 
-    // Append a single event line. Safe to call concurrently — the file
-    // mutex serializes writes. No-op if the log was never opened.
+    // Thread-safe (mutex-serialized). No-op when the log is not open.
     void record(const MessageEvent& ev);
 
     void close();

@@ -1,9 +1,8 @@
 """Load per-run summary JSON, per-modem event JSONL, and per-modem CDC logs
 into long-form pandas DataFrames suitable for plotting and aggregation.
 
-The on-disk schemas are produced by Session D's run-summary writer and
-message-event log. The CDC log is produced by ``CdcConsole`` on the
-Python side -- the simulator does not emit it.
+The summary JSON and event JSONL schemas are produced by the simulator;
+the CDC log is produced by ``CdcConsole`` on the Python side.
 """
 from __future__ import annotations
 
@@ -70,11 +69,11 @@ def _cell_dirs(out_dir: Path) -> Iterable[Path]:
 def load_sweep(out_dir: str | Path) -> pd.DataFrame:
     """Walk a sweep output directory and return a long-form DataFrame: one
     row per ``(cell_id, modem_id, direction, sequence_id)`` message event,
-    annotated with the cell's summary-level scalars (random_seed,
-    p99_us, underrun_count, tx_packets_total, ...).
+    annotated with the cell's summary-level scalars (random_seed, p99_us,
+    underrun_count, tx_packets_total, ...).
 
-    Empty cells (no events) still get one row with NaNs for event fields,
-    so a sweep that produced zero messages doesn't silently disappear.
+    Empty cells (no events) still get one row with NaNs for event fields so
+    they don't silently disappear from the result.
     """
     out_root = Path(out_dir)
     if not out_root.is_dir():

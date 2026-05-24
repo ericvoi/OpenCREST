@@ -9,15 +9,13 @@
 
 namespace openCREST {
 
-// Per-receiver fan-in: sums the contributions from every PairBuffer that
-// targets this receiver, adds receiver-specific ambient noise, converts to
-// DAC samples, and writes to the receiver's rx_ring.
+// Per-receiver fan-in: sums every PairBuffer that targets this receiver,
+// adds ambient noise, converts to DAC samples, writes to rx_ring.
 //
-// Driven by the receiver-side ModemIO (which calls pull() before sending an
-// RX packet to the modem). The receiver's clock is the modem DAC rate, so
-// the read cadence is naturally driven by ModemIO::send_rx_data.
+// Driven by the receiver's ModemIO::send_rx_data; the read cadence is
+// naturally the DAC rate.
 //
-// Lifetime: incoming PairBuffer pointers must outlive the ReceiverMix.
+// Incoming PairBuffer pointers must outlive the ReceiverMix.
 class ReceiverMix {
 public:
     ReceiverMix(std::vector<PairBuffer*> incoming,
@@ -28,20 +26,16 @@ public:
     ReceiverMix(const ReceiverMix&)            = delete;
     ReceiverMix& operator=(const ReceiverMix&) = delete;
 
-    // Pull `count` receiver-time samples:
-    //   for each incoming PairBuffer p:
-    //     p.read_advance(scratch, count)  → temp accumulator += scratch
-    //   accumulator += noise_gen.generate(count)
-    //   convert float → DAC bits, write to rx_ring (best effort).
+    // Pull `count` receiver-time samples: sum each incoming PairBuffer,
+    // add noise, convert to DAC bits, best-effort write to rx_ring.
     // Returns the number of DAC samples accepted by rx_ring (may be less
-    // than `count` if rx_ring is full — caller may retry next tick).
+    // than `count`).
     //
-    // Always advances the PairBuffer read heads by `count` even if rx_ring
-    // is too full to accept the full block, so the receiver clock keeps up
-    // with wall time (the rx_ring drop is the visible loss).
+    // Always advances PairBuffer read heads by `count` even if rx_ring
+    // is full, so the receiver clock keeps up with wall time. The rx_ring
+    // drop is the visible loss.
     size_t pull(SPSCRingBuffer<uint16_t>& rx_ring, size_t count);
 
-    // Diagnostics
     uint64_t rx_ring_drops() const { return rx_ring_drops_; }
 
 private:
@@ -49,10 +43,9 @@ private:
     dsp::NoiseGenerator      noise_gen_;
     CalibrationData          rcv_cal_;
 
-    // Pre-allocated scratch. Sized for one PROCESSING_BLOCK_SIZE pull;
-    // pull() asserts count <= scratch size.
-    std::vector<float>    pair_scratch_;     // for each PairBuffer read
-    std::vector<float>    sum_scratch_;      // running sum across pairs
+    // Pre-allocated scratch, one PROCESSING_BLOCK_SIZE block.
+    std::vector<float>    pair_scratch_;
+    std::vector<float>    sum_scratch_;
     std::vector<float>    noise_scratch_;
     std::vector<uint16_t> dac_scratch_;
 

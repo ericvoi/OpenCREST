@@ -14,8 +14,6 @@ namespace openCREST {
 
 namespace {
 
-// Group channel configs by source-modem index. Returns a vector parallel to
-// `modems`: out[src_idx] = list of (channel_index, receiver_modem_index).
 struct PairKey {
     size_t channel_idx;
     size_t receiver_idx;
@@ -26,10 +24,6 @@ double clamp_sound_speed_engine(float speed) {
 }
 
 } // namespace
-
-// ---------------------------------------------------------------------------
-// Construction / sizing
-// ---------------------------------------------------------------------------
 
 size_t ChannelEngine::modem_index(const std::string& id) const {
     for (size_t i = 0; i < modems_.size(); ++i) {
@@ -43,20 +37,18 @@ size_t ChannelEngine::worst_case_pair_capacity(const ScenarioConfig& scenario,
     const double sound_speed = clamp_sound_speed_engine(
         scenario.environment.sound_speed_m_s);
 
-    // Per-channel max write-offset (base_delay + multipath tail). Static
-    // channels get the legacy `range_m + MAX_MULTIPATH_DELAY_S` envelope;
-    // geometric channels compute longest_path_at_r_max directly from their
-    // scene (the receiver-side write tip lives at that offset, because
-    // Channel anchors base_delay at direct_path_at_r_min and max_tap_delta
-    // covers up to longest_path_at_r_max minus that anchor).
+    // Per-channel max write-offset (base_delay + multipath tail).
+    // Static channels: `range_m + MAX_MULTIPATH_DELAY_S`.
+    // Geometric channels: longest_path_at_r_max (since Channel anchors
+    // base_delay at direct_path_at_r_min and max_tap_delta covers up to
+    // longest_path_at_r_max minus that anchor).
     size_t worst_channel_extent = 0;
 
     for (const auto& cc : scenario.channels) {
         size_t extent = 0;
 
         if (cc.mode == ChannelMode::Geometric) {
-            // Build a transient scene only to query the worst path length
-            // at r_max — does not allocate after this scope ends.
+            // Transient scene used only to query worst path length at r_max.
             EnvironmentConfig env;
             env.sound_speed_m_s = scenario.environment.sound_speed_m_s;
             env.saltwater       = scenario.environment.saltwater;
@@ -79,10 +71,9 @@ size_t ChannelEngine::worst_case_pair_capacity(const ScenarioConfig& scenario,
         worst_channel_extent = std::max(worst_channel_extent, extent);
     }
 
-    // environment.max_range_m is a *floor* for the static-style budget: lets
-    // a scenario reserve memory for ranges larger than any channel actually
-    // declares. Geometric channels have their own per-channel r_max which
-    // dominates above.
+    // environment.max_range_m is a floor for the static-style budget;
+    // lets scenarios reserve memory for ranges larger than any declared
+    // channel. Geometric channels are bounded by their own r_max above.
     if (scenario.environment.max_range_m > 0.0f) {
         const size_t env_base = static_cast<size_t>(std::round(
             static_cast<double>(scenario.environment.max_range_m) *
@@ -94,9 +85,8 @@ size_t ChannelEngine::worst_case_pair_capacity(const ScenarioConfig& scenario,
     if (worst_channel_extent == 0) worst_channel_extent = sample_rate;  // floor
 
     // In-flight slack: hold an entire max-duration message because the
-    // receiver does not drain while the destination modem is in TX state
-    // (half-duplex loopback) or while its pull-thread is otherwise idle.
-    // Sized from the scenario, with a 10 s fallback if the field is unset.
+    // receiver does not drain while its modem is in TX (half-duplex) or
+    // while its pull-thread is otherwise idle. Falls back to 10 s.
     float msg_dur_s = scenario.environment.max_message_duration_s;
     if (!(msg_dur_s > 0.0f)) msg_dur_s = 10.0f;
     const size_t in_flight = static_cast<size_t>(
@@ -116,11 +106,10 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
     const uint32_t sample_rate = modems_[0].sample_rate;
     const size_t   pair_cap    = worst_case_pair_capacity(scenario, sample_rate);
 
-    // Resolve each modem's TransducerSpec from the scenario by walking
-    // scenario.modems in PerModemContext order. Loader guarantees every
-    // transducer_id resolves; if a context has no matching ModemConfig
-    // (test fixtures that bypass the loader) fall back to an identity
-    // TransducerSpec so the physical-gain math collapses to -TL.
+    // Resolve each modem's TransducerSpec. Loader guarantees every
+    // transducer_id resolves; test fixtures bypassing the loader fall
+    // back to an identity TransducerSpec so the physical-gain math
+    // collapses to -TL.
     std::vector<TransducerSpec> transducer_per_modem(modems_.size());
     for (size_t i = 0; i < modems_.size(); ++i) {
         for (const auto& mc : scenario.modems) {
@@ -146,10 +135,10 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
         const size_t src_idx = modem_index(cc.from_modem);
         const size_t rcv_idx = modem_index(cc.to_modem);
 
-        // Build the channel pipeline first so we can read its base_delay.
-        // The receiver's boost (not the source's) is what every channel
-        // feeding this receiver gets — the boost preserves SNR at the
-        // receiver, so the noise and the signal must scale together.
+        // Build channel first so we can read its base_delay.
+        // The receiver's boost (not the source's) applies — boost
+        // preserves SNR at the receiver, so signal and noise must scale
+        // together.
         auto channel = std::make_unique<Channel>(cc,
                                                   modems_[src_idx].calibration,
                                                   modems_[rcv_idx].calibration,
@@ -159,15 +148,14 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
         const double prop_delay_s   = channel->propagation_delay_seconds();
         const uint32_t receiver_fs  = modems_[rcv_idx].sample_rate;
 
-        // PairBuffer: the propagation-delay backbone for this directed pair.
+        // Propagation-delay backbone for this directed pair.
         auto pair = std::make_unique<PairBuffer>(pair_cap,
                                                   channel->base_delay_samples());
         PairBuffer* pair_raw = pair.get();
         pair_buffers_.push_back(std::move(pair));
 
-        // Outgoing's receiver_fill_tracker + receiver_rx_ring are
-        // wired post-construction via wire_modem_trackers. Record the
-        // back-pointer here so the wiring step can find these entries.
+        // Receiver-side fields wired later via wire_modem_trackers; record
+        // a back-pointer so the wiring step can find this entry.
         SourceWorker::Outgoing og;
         og.channel              = std::move(channel);
         og.pair_buffer          = pair_raw;
@@ -180,12 +168,11 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
         per_receiver_incoming[rcv_idx].push_back(pair_raw);
     }
 
-    // SourceWorkers: one per source modem (only modems with outgoing channels
-    // actually start a worker thread; others are still listed at the same
-    // index but as nullptr so receiver_mix lookups still work).
+    // One SourceWorker per source modem; modems with no outgoing channels
+    // get a nullptr slot so receiver_mix indices still line up.
     source_workers_.resize(modems_.size());
     for (size_t i = 0; i < modems_.size(); ++i) {
-        if (per_source_outgoing[i].empty()) continue;  // no outgoing → no worker
+        if (per_source_outgoing[i].empty()) continue;
         source_workers_[i] = std::make_unique<SourceWorker>(
             modems_[i].id,
             *modems_[i].runtime,
@@ -194,8 +181,8 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
             std::move(per_source_outgoing[i]));
     }
 
-    // ReceiverMixes: one per modem, even if it receives nothing (then it
-    // just emits silence + noise).
+    // One ReceiverMix per modem; a modem with no incoming channels emits
+    // silence + noise.
     receiver_mixes_.reserve(modems_.size());
     for (size_t i = 0; i < modems_.size(); ++i) {
         receiver_mixes_.push_back(std::make_unique<ReceiverMix>(
@@ -218,10 +205,6 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
 ChannelEngine::~ChannelEngine() {
     stop();
 }
-
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
 
 void ChannelEngine::start() {
     if (started_.exchange(true, std::memory_order_acq_rel)) return;
@@ -247,8 +230,8 @@ void ChannelEngine::stop() {
     }
     worker_threads_.clear();
 
-    // Surface any silent overflow drops — a dropped sample means the
-    // PairBuffer was undersized for this scenario's traffic.
+    // A dropped sample means the PairBuffer was undersized for the
+    // scenario's traffic.
     for (size_t i = 0; i < pair_buffers_.size(); ++i) {
         const uint64_t drops = pair_buffers_[i]->overflow_drops();
         if (drops > 0) {
@@ -298,15 +281,13 @@ void ChannelEngine::wire_modem_trackers(
     SPSCRingBuffer<uint16_t>* rx_ring) {
     if (modem_idx >= modems_.size()) return;
 
-    // If this modem is a source, wire its TxStartEstimator into the
-    // SourceWorker driving its outgoing channels.
+    // If this modem is a source, wire its TxStartEstimator.
     if (modem_idx < source_workers_.size() && source_workers_[modem_idx]) {
         source_workers_[modem_idx]->set_source_tx_estimator(tx_start_estimator);
     }
 
-    // For every outgoing channel that *feeds* this modem (i.e. this
-    // modem is the receiver), record its fill tracker and rx_ring in
-    // the corresponding SourceWorker's Outgoing entry.
+    // For every channel that feeds INTO this modem (it's the receiver),
+    // record its fill_tracker and rx_ring in the source-side Outgoing entry.
     for (const auto& ref : per_receiver_outgoing_refs_[modem_idx]) {
         if (ref.source_idx >= source_workers_.size()) continue;
         auto& sw = source_workers_[ref.source_idx];

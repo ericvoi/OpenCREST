@@ -1,13 +1,9 @@
 """End-to-end smoke test for the Exp 2 analysis pipeline.
 
-Per ``feedback_opencrest_no_test_specific_code.md`` the openCREST binary
-stays test-agnostic — the Python harness wraps it as an opaque
-subprocess. The smoke test therefore synthesizes a fake cell directory
-(scenario.yaml, requests.jsonl, summary JSON) for one config and
-exercises the real ``analyse`` + CSV writers + violin renderer.
-
-If the analysis pipeline drifts (CSV column order, summary JSON schema,
-violin labels), this test catches it without needing real hardware.
+Synthesises fake cell directories (scenario.yaml, requests.jsonl,
+summary JSON) and exercises the real ``analyse``, CSV writers, and
+violin renderer to catch analysis-pipeline drift (CSV column order,
+summary schema, violin labels) without needing real hardware.
 """
 from __future__ import annotations
 
@@ -40,13 +36,13 @@ def _synthesize_cell(out_dir: Path,
     cell_dir = out_dir / f"cell_{config_id}"
     cell_dir.mkdir(parents=True, exist_ok=True)
 
-    # scenario.yaml — analysis uses the ``name:`` line to map cell -> config
+    # scenario.yaml: analysis uses the ``name:`` line to map cell -> config.
     (cell_dir / "scenario.yaml").write_text(
         f"name: exp2_ranging_{config_id}\n"
         f"description: synthetic smoke fixture\n"
     )
 
-    # requests.jsonl — one row per request
+    # requests.jsonl: one row per request.
     records = []
     base_ts = 1_000_000_000
     for i, rng in enumerate(range_readouts):
@@ -68,7 +64,7 @@ def _synthesize_cell(out_dir: Path,
         for rec in records:
             fp.write(json.dumps(rec) + "\n")
 
-    # summary.json — minimal Session D-shaped payload
+    # summary.json: minimal payload matching the simulator's schema.
     pt = processing or dict(
         count=1234, mean_us=190.0, p50_us=170, p95_us=290,
         p99_us=320, max_us=410, underrun_count=0,
@@ -91,8 +87,8 @@ def _synthesize_cell(out_dir: Path,
 # ---------------------------------------------------------------------------
 
 def test_config_a_six_responses_all_at_500(tmp_path: Path) -> None:
-    """Synthesise 6 ``Range: 500.00m`` responses for config (a) and assert
-    the analysis pipeline writes 6 result rows with zero error."""
+    """Six ``Range: 500.00m`` responses for config (a) produce six
+    zero-error CSV rows."""
     out_dir = tmp_path / "results"
     _synthesize_cell(out_dir, "a",
                      range_readouts=[500.0] * 6)
@@ -139,8 +135,8 @@ def test_processing_table_row_per_config(tmp_path: Path) -> None:
 
 def test_timeouts_are_recorded_but_excluded_from_error_stats(
         tmp_path: Path) -> None:
-    """A timed-out request shows up in the CSV (blank fields) but doesn't
-    contribute to the error array used by the violin plot."""
+    """Timeouts appear in the CSV with blank fields and are excluded from
+    the error array used by the violin plot."""
     out_dir = tmp_path / "results"
     _synthesize_cell(out_dir, "a",
                      range_readouts=[500.0, None, 501.0, None])
@@ -157,7 +153,7 @@ def test_timeouts_are_recorded_but_excluded_from_error_stats(
     write_ranging_results_csv([a], csv_path)
     rows = list(csv.DictReader(csv_path.open()))
     assert len(rows) == 4
-    # The two timeouts have empty range_m / error_m / latency.
+    # Timeouts have empty range_m / error_m / latency.
     timeouts = [r for r in rows if r["range_m"] == ""]
     assert len(timeouts) == 2
     for t in timeouts:
@@ -183,11 +179,11 @@ def test_violin_renders_pdf(tmp_path: Path) -> None:
 
 def test_outlier_excluded_from_violin_inlier_stats_but_kept_in_csv(
         tmp_path: Path) -> None:
-    """An outlier measurement (|err| above threshold) is preserved in the
-    CSV (with is_outlier=1), excluded from ``errors_inlier``, listed by
+    """An outlier (|err| above threshold) is kept in the CSV (with
+    is_outlier=1), excluded from ``errors_inlier``, listed by
     ``outliers``, and dropped from the violin distribution."""
     out_dir = tmp_path / "results"
-    # 4 in-range responses + 1 wildly-off outlier at 319 m.
+    # 4 in-range responses + 1 outlier at 319 m.
     _synthesize_cell(out_dir, "d",
                      range_readouts=[500.5, 499.5, 501.0, 319.15, 500.2])
 
@@ -195,20 +191,17 @@ def test_outlier_excluded_from_violin_inlier_stats_but_kept_in_csv(
     a = analyses[0]
     threshold = 50.0
 
-    # Raw errors still see all 5.
     assert a.errors_m.size == 5
 
-    # Inlier filter drops only the 319 m measurement.
     inliers = a.errors_inlier(threshold)
     assert inliers.size == 4
     assert all(abs(e) <= threshold for e in inliers)
 
-    # outliers() returns the dropped record(s).
     outliers = a.outliers(threshold)
     assert len(outliers) == 1
     assert outliers[0].range_m == pytest.approx(319.15)
 
-    # CSV writes all 5 rows, flags the outlier with is_outlier=1.
+    # CSV writes all 5 rows and flags the outlier with is_outlier=1.
     csv_path = out_dir / "ranging_results.csv"
     write_ranging_results_csv([a], csv_path,
                               outlier_threshold_m=threshold)
@@ -222,8 +215,8 @@ def test_outlier_excluded_from_violin_inlier_stats_but_kept_in_csv(
 
 
 def test_analyse_skips_cells_missing_requests_jsonl(tmp_path: Path) -> None:
-    """A directory with scenario.yaml but no requests.jsonl produces an
-    analysis with zero records — not a crash."""
+    """A directory with scenario.yaml but no requests.jsonl produces a
+    zero-records analysis rather than a crash."""
     out_dir = tmp_path / "results"
     cell = out_dir / "stub_a"
     cell.mkdir(parents=True)

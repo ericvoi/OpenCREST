@@ -1,29 +1,18 @@
 """USB CDC console driver for the OpenAquatix HMI.
 
-Each modem exposes a USB CDC interface that, in addition to the bulk HIL
-data path, prints decoded payloads / ranging results / status to a text
-terminal. The harness needs to:
+Each modem exposes a USB CDC interface that prints decoded payloads,
+ranging results, and status to a text terminal alongside the bulk HIL
+data path. This driver tails the terminal into a per-modem log file and
+sends menu-driven commands (chirp, ranging request, text/JANUS transmit).
 
-* Tail that terminal into a per-modem log file (one timestamped line
-  per firmware print).
-* Send menu-driven commands to trigger the experiment-specific actions:
-  a chirp, a ranging request, a string transmit.
+The simulator's USB transport claims the bulk endpoints; this driver opens
+the modem's CDC TTY (e.g. ``/dev/ttyACM0``) directly using pyserial. The
+two share the device but address disjoint endpoints.
 
-The simulator's USB transport already claims the bulk endpoints; this
-driver opens the modem's CDC TTY (e.g. ``/dev/ttyACM0``) directly using
-pyserial. The two share the device but address disjoint endpoints, so
-they don't fight.
-
-Menu navigation is *not* path-based. Per the project HMI design:
-
-* Digits 1..N (followed by a newline) select a child menu by index.
-* ``\\e`` (ESC) immediately backs out one level.
-
-Rather than expose generic menu paths, this module ships small task-level
-helpers (``send_chirp_tx``, ``send_ranging_request``, ``send_text_message``)
-that encode the known firmware menu order. The keystroke sequences are
-documented in-line; one regression per firmware menu reorganisation is
-acceptable per the Session E plan.
+Menu navigation: digits ``1..N`` (followed by a newline) select a child
+menu by index; ``\\e`` (ESC) backs out one level. Task-level helpers
+(``send_chirp_tx``, ``send_ranging_request``, ``send_text_message``,
+``send_janus_011_01_tx``) encode the known firmware menu order.
 """
 from __future__ import annotations
 
@@ -38,7 +27,7 @@ from typing import Callable, IO, Optional, Protocol
 
 try:
     import serial as pyserial      # pyserial
-except ImportError:                # pragma: no cover - exercised only in dev
+except ImportError:                # pragma: no cover
     pyserial = None                # type: ignore[assignment]
 
 
@@ -50,11 +39,8 @@ def find_tty_by_serial(usb_serial: str,
                        sys_class_tty: str | os.PathLike = "/sys/class/tty",
                        dev_root: str | os.PathLike = "/dev") -> Optional[Path]:
     """Return ``/dev/ttyACMN`` for the modem with the given USB serial, or
-    ``None`` if no matching device is enumerated.
-
-    Walks ``/sys/class/tty/ttyACM*/device`` upward looking for a ``serial``
-    attribute that matches ``usb_serial``. ``sys_class_tty`` and ``dev_root``
-    are overridable so tests can point at a fake layout.
+    ``None`` if no matching device is enumerated. ``sys_class_tty`` and
+    ``dev_root`` are overridable so tests can point at a fake layout.
     """
     base = Path(sys_class_tty)
     dev  = Path(dev_root)
@@ -98,9 +84,9 @@ class SerialBackend(Protocol):
 class FakeSerial:
     """In-memory ``SerialBackend`` used by the tests.
 
-    Bytes written by the caller are appended to ``written``. Bytes the
-    fake "receives from the modem" are fed via :meth:`inject` and yielded
-    one byte at a time from :meth:`read`.
+    Caller writes are appended to ``written``. Bytes the fake "receives
+    from the modem" are fed via :meth:`inject` and yielded one byte at a
+    time from :meth:`read`.
     """
     written: bytearray = None
     _rx: queue.Queue = None
@@ -166,10 +152,9 @@ class CdcConsole:
     LINE_TERMINATOR = "\r"
     BACK_KEY        = "\x1b"   # WITHDRAW_CHAR
 
-    # Tiny inter-keystroke pause so the firmware's input loop has time to
-    # process each line before the next arrives. 50 ms is well below the
-    # 100 ms minimum acoustic propagation delay so it doesn't matter for
-    # experiment timing.
+    # Inter-keystroke pause so the firmware's input loop can process each line
+    # before the next arrives. Well below the minimum acoustic propagation
+    # delay so it doesn't matter for experiment timing.
     _KEYSTROKE_PAUSE_S = 0.05
 
     def __init__(self,
@@ -226,8 +211,8 @@ class CdcConsole:
                        modem_id: str,
                        backend: SerialBackend,
                        log_path: str | Path) -> "CdcConsole":
-        """Wrap an arbitrary ``SerialBackend`` (used by tests and by hosts
-        that have already opened the TTY themselves)."""
+        """Wrap an arbitrary ``SerialBackend`` (tests, or hosts that have
+        already opened the TTY)."""
         return cls(modem_id, backend, Path(log_path), owns_backend=False)
 
     # --- I/O -------------------------------------------------------------
@@ -254,14 +239,9 @@ class CdcConsole:
         return self._log_path
 
     def is_reader_alive(self) -> bool:
-        """True iff the background read thread is still running.
-
-        Returns False after :meth:`detach` *and* after a pyserial-level
-        failure (USB hot-unplug, kernel I/O error). Used by exp3's TX
-        loop to bail out of a cell as soon as the CDC channel is dead,
-        rather than wasting 13 min issuing TX commands whose RX prints
-        will never land in the log.
-        """
+        """True iff the background read thread is still running. Returns False
+        after :meth:`detach` and after a pyserial-level failure (USB hot-
+        unplug, kernel I/O error)."""
         return self._reader.is_alive() and not self._stop_evt.is_set()
 
     def _read_loop(self) -> None:
@@ -274,8 +254,8 @@ class CdcConsole:
                 continue
             self._buf.extend(chunk)
             while True:
-                # Firmware terminates lines with "\r\n" (see hmi_usb.c).
-                # Tolerate bare "\n" too so test fixtures stay readable.
+                # Firmware terminates lines with "\r\n"; bare "\n" tolerated
+                # for test fixtures.
                 idx = self._buf.find(b"\n")
                 if idx < 0:
                     break
@@ -291,12 +271,12 @@ class CdcConsole:
 
     def send_keys(self, keys: str) -> None:
         """Raw passthrough. ``keys`` may include ``\\e`` for back navigation
-        and ``\\r`` to commit a numeric selection or text payload."""
+        and ``\\r`` to commit a selection or payload."""
         self._serial.write(keys.encode("utf-8"))
 
     def send_line(self, text: str) -> None:
-        """Send ``text`` followed by the firmware's line terminator and a
-        short post-pause."""
+        """Send ``text`` followed by the firmware's line terminator and pause
+        briefly so the firmware can ingest it."""
         self._serial.write((text + self.LINE_TERMINATOR).encode("utf-8"))
         time.sleep(self._KEYSTROKE_PAUSE_S)
 
@@ -307,34 +287,50 @@ class CdcConsole:
             time.sleep(self._KEYSTROKE_PAUSE_S)
 
     def reset_to_main(self) -> None:
-        """Back out far enough to guarantee we're at the root menu.
-
-        The deepest navigable leaf is 2 levels below root; 4 ESCs is safe
-        and idempotent (ESC at root is a no-op in the firmware)."""
+        """Back out to the root menu. ESC at root is a no-op in the firmware,
+        so 4 ESCs is safe and idempotent for the 2-deep menu tree."""
         self.send_back(4)
+
+    # --- responsiveness check -------------------------------------------
+
+    def verify_main_menu(self,
+                         timeout_s: float = 2.0,
+                         n_esc:     int   = 4) -> bool:
+        """Ping the modem and confirm it echoes the main menu within
+        ``timeout_s``. Distinguishes a silent/wedged modem from one that
+        responds but later produces no decode output.
+        """
+        # Drain stale lines so they don't satisfy the regex accidentally.
+        self.drain_lines()
+        for _ in range(n_esc):
+            self._serial.write(self.BACK_KEY.encode("utf-8"))
+            time.sleep(self._KEYSTROKE_PAUSE_S)
+        try:
+            self.expect_line(r"Main Menu", timeout=timeout_s)
+            return True
+        except TimeoutError:
+            return False
 
     # --- task-level helpers ---------------------------------------------
 
     def send_chirp_tx(self) -> None:
-        """Trigger the firmware LFM chirp (Session A) on the transducer.
+        """Trigger the firmware LFM chirp on the transducer.
 
-        Menu path: ROOT -> ``DBG`` (2) -> ``CHIRP_TX`` (15) -> handler-trigger
-        (any line input). After execution the firmware auto-returns to DBG.
+        Menu path: ROOT -> ``DBG`` (2) -> ``CHIRP_TX`` (15) -> empty-line
+        handler trigger. After execution the firmware auto-returns to DBG.
         """
         self.reset_to_main()
         self.send_line(self.MAIN_DBG)
         self.send_line(self.DBG_CHIRP_TX)
-        # The chirp leaf has no parameters; sending an empty line submits
-        # the function call. (See sendChirpTransducer in comm_debug_menu.c.)
+        # The chirp leaf has no parameters; an empty line submits the call.
         self.send_line("")
 
     def send_ranging_request(self, target_modem_id: int | None = None) -> None:
         """Trigger a TX-through-transducer ranging request.
 
-        Menu path: ROOT -> ``TXRX`` (4) -> ``RANGEOUT`` (9). The handler
-        then prompts for the destination address; if ``target_modem_id`` is
-        supplied it is sent verbatim, otherwise the caller is responsible
-        for any follow-up prompt (e.g. via :meth:`send_line`).
+        Menu path: ROOT -> ``TXRX`` (4) -> ``RANGEOUT`` (9) -> [address].
+        If ``target_modem_id`` is omitted the caller handles the address
+        prompt separately (e.g. via :meth:`send_line`).
         """
         self.reset_to_main()
         self.send_line(self.MAIN_TXRX)
@@ -360,10 +356,8 @@ class CdcConsole:
 
         Menu path: ROOT -> ``JANUS`` (5) -> ``SEND`` (2) -> ``011_01_OUT`` (1) -> [text]
 
-        The firmware (see ``transmit_011_01`` in comm_janus_menu.c) only
-        accepts the message if the modem is already in JANUS protocol mode
-        — Exp 3 pre-configures both modems offline so the driver doesn't
-        need to flip the protocol every cell.
+        The firmware only accepts the message if the modem is already in
+        JANUS protocol mode; configure it out of band before invoking.
         """
         self.reset_to_main()
         self.send_line(self.MAIN_JANUS)

@@ -223,10 +223,8 @@ TEST(ChannelPipeline, DelayedTapImpulseArrivesAfterDelay) {
 }
 
 // ===========================================================================
-// Geometric-mode pipeline smoke test: same fixture as the static loopback
-// but with `mode: geometric`, direct-only, v=0. The end-to-end pipeline
-// must still deliver non-trivial signal energy to rx_ring — proves the
-// SourceWorker / Channel / PairBuffer wiring carries the geometric branch.
+// Geometric-mode pipeline smoke test: with `mode: geometric`, direct-only,
+// v=0, the end-to-end pipeline delivers non-trivial signal energy to rx_ring.
 // ===========================================================================
 
 TEST(ChannelPipeline, GeometricDirectOnlyLoopbackPreservesEnergy) {

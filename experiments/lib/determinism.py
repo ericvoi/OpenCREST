@@ -1,10 +1,5 @@
-"""Determinism check.
-
-Run the same scenario twice and verify every output artifact is bit-equal
-under a per-artifact normalisation rule. Used as a pre-flight before any
-expensive sweep -- if the simulator drifted into nondeterminism (race
-condition in init, time-dependent default, etc.) the cross-seed sweeps
-that follow would not be trustworthy.
+"""Determinism check: run the same scenario twice and verify every output
+artifact is bit-equal under a per-artifact normalisation rule.
 
 Normalisation rules:
 
@@ -13,13 +8,13 @@ Normalisation rules:
   may leave them at zero on signal-driven shutdown.
 * **CDC log**: SHA256 over ``<line_text>`` only, stripping the host
   timestamp prefix.
-* **Event JSONL**: SHA256 over ``<modem_id, direction, sequence_id, sample_count>``
-  per line; the wall-clock ``start_ns``/``end_ns`` fields are
-  excluded because they're real-time-dependent.
+* **Event JSONL**: SHA256 over ``<modem_id, direction, sequence_id,
+  sample_count>`` per line; wall-clock ``start_ns``/``end_ns`` are
+  excluded.
 * **Summary JSON**: SHA256 over a documented subset of fields:
-  ``random_seed``, ``processing_time.{p50_us, p95_us, p99_us, count, underrun_count}``,
-  ``channel_engine.*``. Excludes timestamps and the ``processing_time.mean_us``
-  rounding-flutter field.
+  ``random_seed``, ``processing_time.{p50_us, p95_us, p99_us, count,
+  underrun_count}``, ``channel_engine.*``. Excludes timestamps and the
+  rounding-flutter ``processing_time.mean_us`` field.
 """
 from __future__ import annotations
 

@@ -1,11 +1,4 @@
-// Tests for the clock-extrapolation fill tracker. Verifies:
-//   - Steady-state extrapolation tracks within ±1 sample
-//   - Fallback path engages when status references an unknown packet_id
-//   - Rate estimator converges toward the true modem rate
-//   - Hysteresis prevents chatter at the target boundary
-//   - Burst cap limits over-fill during catch-up
-//   - reset() clears anchor + ring but keeps the smoothed rate (load-bearing)
-//   - First post-reset status doesn't trigger rate inference (skip flag)
+// Tests for the clock-extrapolation fill tracker.
 #include <gtest/gtest.h>
 #include "io/clock_fill_tracker.hpp"
 #include "protocol/packets.hpp"
@@ -53,9 +46,8 @@ constexpr auto us(int64_t n) { return std::chrono::microseconds(n); }
 
 } // namespace
 
-// Test 9: Synthetic steady-state trace. Inject one anchor; advance time
-// while sending packets at the nominal rate; extrapolated fill must
-// track the true fill within ±1 sample (rounding budget).
+// With one anchor and packets at nominal cadence, extrapolated fill
+// tracks true fill within ±1 sample (rounding budget).
 TEST(ClockFillTracker, SteadyStateExtrapolationWithinOneSample) {
     ClockFillTracker tr(base_cfg());
 
@@ -81,10 +73,9 @@ TEST(ClockFillTracker, SteadyStateExtrapolationWithinOneSample) {
     EXPECT_NEAR(static_cast<int32_t>(fill_now), 8000, 2);
 }
 
-// Test 10: A status packet referencing a fill_reference_id that isn't
-// in the ring (e.g. evicted by load) MUST fall back to a status-arrival
-// anchor and increment the fallback counter. The estimated fill should
-// still be sensible (= status.buffer_fill at status-arrival time).
+// Status referencing an unknown packet_id (e.g. evicted by load) must
+// fall back to a status-arrival anchor and bump the fallback counter.
+// Estimated fill at anchor time equals reported buffer_fill.
 TEST(ClockFillTracker, UnknownFillReferenceIdFallsBackAndCounts) {
     ClockFillTracker tr(base_cfg());
 
@@ -101,13 +92,10 @@ TEST(ClockFillTracker, UnknownFillReferenceIdFallsBackAndCounts) {
     EXPECT_EQ(tr.estimated_fill(T0), 7000u);
 }
 
-// Test 11: Over 100 status packets driven by a known-rate simulated
-// modem, the EWMA rate estimator converges to within 0.1% of the
-// modem's actual rate. We simulate a modem running at 500'000 samples/s.
+// Over 100 status packets at a known modem rate, the EWMA estimator
+// converges to within 0.1% of truth, even starting from a 1%-high seed.
 TEST(ClockFillTracker, RateEstimatorConvergesToWithinTenthPercent) {
     auto cfg = base_cfg();
-    // Seed deliberately off — say 1% high — so we can see the EWMA pull
-    // it back toward the true rate.
     cfg.initial_modem_rate_hint = 505'000;
     ClockFillTracker tr(cfg);
 
@@ -141,12 +129,9 @@ TEST(ClockFillTracker, RateEstimatorConvergesToWithinTenthPercent) {
     EXPECT_NEAR(tr.estimated_modem_rate(), TRUE_FS, TRUE_FS * 0.001);
 }
 
-// Test 12: A single anomalous status packet (e.g. fill jump that
-// implies rate far outside any physically plausible range) must NOT
-// permanently bias the long-term estimate. The tracker may either
-// reject the observation outright (sanity bound) or attenuate it via
-// EWMA; either way, after recovery cycles the rate stays close to
-// truth.
+// A single anomalous status packet (implausible fill jump) must not
+// permanently bias the long-term estimate. After clean cycles resume,
+// the estimate returns within 1% of truth.
 TEST(ClockFillTracker, RateEstimatorRobustToSingleOutlier) {
     ClockFillTracker tr(base_cfg());
     const time_point T0 = ctclock::now();
@@ -168,9 +153,8 @@ TEST(ClockFillTracker, RateEstimatorRobustToSingleOutlier) {
         tr.on_status(make_status(8192, pkt_id), t);
     }
 
-    // Outlier: fill jumps implausibly low. This is exactly the case
-    // where the sanity bound (rate ≥ 2× nominal would imply 6× normal
-    // consumption) should reject the observation.
+    // Outlier: fill jumps implausibly low. The sanity bound (rate ≥ 2×
+    // nominal would imply 6× normal consumption) should reject this.
     for (int p = 0; p < 5; ++p) {
         t += us(510);
         ++pkt_id;
@@ -178,9 +162,9 @@ TEST(ClockFillTracker, RateEstimatorRobustToSingleOutlier) {
     }
     tr.on_status(make_status(2000, pkt_id), t);  // jump from 8192 → 2000
 
-    // 20 normal cycles with fill held steady at the new level. Whether
-    // the rate was perturbed by the outlier or not, it should converge
-    // back toward TRUE_FS once clean data resumes.
+    // 20 normal cycles with fill steady at the new level. Whether the
+    // rate was perturbed by the outlier or not, it converges back toward
+    // TRUE_FS once clean data resumes.
     for (int i = 0; i < 20; ++i) {
         for (int p = 0; p < 5; ++p) {
             t += us(510);
@@ -190,14 +174,12 @@ TEST(ClockFillTracker, RateEstimatorRobustToSingleOutlier) {
         tr.on_status(make_status(2000, pkt_id), t);  // fill steady-state
     }
 
-    // Final estimate within 1% of truth — the outlier's effect did
-    // not stick.
     EXPECT_NEAR(tr.estimated_modem_rate(), TRUE_FS, TRUE_FS * 0.01);
 }
 
-// Test 13: Hysteresis: once fill enters the hold band, should_send
-// remains false until fill drops below the target. No chatter when
-// fill oscillates just above the target.
+// Once fill enters the hold band, should_send stays false until fill
+// drops clearly below target — no chatter when fill oscillates just
+// above target.
 TEST(ClockFillTracker, ShouldSendBelowTargetWithHysteresis) {
     auto cfg = base_cfg();
     ClockFillTracker tr(cfg);
@@ -229,10 +211,9 @@ TEST(ClockFillTracker, ShouldSendBelowTargetWithHysteresis) {
     EXPECT_TRUE(tr.should_send(T0 + us(1530)));
 }
 
-// Test 14: When fill is well below target, the tracker may burst —
-// but its average send rate over a window MUST NOT exceed
-// burst_cap_multiplier × nominal_rate. Otherwise modem buffer
-// overruns.
+// When fill is well below target, the tracker may burst — but its
+// average send rate over a window must not exceed
+// burst_cap_multiplier × nominal_rate (else the modem buffer overruns).
 TEST(ClockFillTracker, BurstCappedAtMaxRate) {
     auto cfg = base_cfg();
     cfg.burst_cap_multiplier = 1.5f;
@@ -262,10 +243,9 @@ TEST(ClockFillTracker, BurstCappedAtMaxRate) {
     EXPECT_LE(sends, static_cast<int>(max_allowed) + 1);
 }
 
-// Test 15: reset() clears the anchor and the send-timestamp ring, but
-// MUST preserve the smoothed modem-rate estimate (hardware constant;
-// re-learning it every state transition would waste an anchor pair
-// per cycle).
+// reset() clears anchor and send-timestamp ring, but must preserve the
+// smoothed modem-rate estimate (hardware constant; relearning it every
+// state transition would waste an anchor pair per cycle).
 TEST(ClockFillTracker, ResetClearsAnchorAndRingButKeepsRate) {
     auto cfg = base_cfg();
     cfg.initial_modem_rate_hint = 500'000;
@@ -298,9 +278,8 @@ TEST(ClockFillTracker, ResetClearsAnchorAndRingButKeepsRate) {
     EXPECT_TRUE(tr.last_anchor_was_fallback());
 }
 
-// Test 16: The first status after a reset MUST NOT update the rate
-// estimator. The pipeline depth and pre-reset state would otherwise
-// confuse the inference and slam the rate estimate.
+// The first status after reset must not update the rate estimator
+// (pipeline depth and pre-reset state would otherwise slam the estimate).
 TEST(ClockFillTracker, SkipsRateInferenceOnFirstPostResetStatus) {
     auto cfg = base_cfg();
     cfg.initial_modem_rate_hint = 500'000;

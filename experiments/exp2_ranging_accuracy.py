@@ -1,8 +1,6 @@
-"""Experiment 2 — two-way ranging accuracy at R=500 m (paper §4.3).
+"""Experiment 2 — two-way ranging accuracy at R=500 m.
 
-Reproduces Fig. 3 (range-error distribution per channel config) and
-Tab. 1 (per-block processing-time stats per config) across the four
-configurations of paper §4.3:
+Sweeps four channel configurations:
 
   a — propagation delay only
   b — 3-tap static multipath + bulk Farrow Doppler + clock offset + noise
@@ -12,10 +10,10 @@ configurations of paper §4.3:
 For each config, the driver spawns the simulator once, attaches a CDC
 console to both modems, then issues ``--num-requests`` ranging requests
 back-to-back on modem A. Cadence is response-driven: send a request,
-wait for the ``Range: %.2fm`` line on modem A's CDC (up to ``--response-
-timeout-s``), wait ``--inter-request-delay-s`` after the response (or the
-timeout), then send the next. Single simulator instance per config — the
-modems stay calibrated across the entire 200-request batch.
+wait for the ``Range: %.2fm`` line on modem A's CDC (up to
+``--response-timeout-s``), wait ``--inter-request-delay-s``, repeat. A
+single simulator instance per config keeps the modems calibrated across
+the batch.
 
 Outputs (under ``--out``, default ``experiments/results/exp2/``):
 
@@ -24,16 +22,13 @@ Outputs (under ``--out``, default ``experiments/results/exp2/``):
   <cfg>/modem_*_cdc.log
   <cfg>/requests.jsonl           one row per issued request
 
-  ranging_results.csv            paper Fig. 3 source data
-  processing_table.csv           paper Tab. 1
-  fig_ranging.pdf                paper Fig. 3 — violin per config
+  ranging_results.csv            per-request error data
+  processing_table.csv           per-config processing-time table
+  fig_ranging.pdf                violin per config
 
-Success rates and Tab. 1 figures are printed to stderr after analysis.
-
-Before running this script the user should sanity-check each config's
-SNR with ``experiments/exp2_verify_snr.py`` — the experiment relies on
-the ranging packets staying well above the noise floor so the residual
-error is dominated by modem-side ranging precision, not packet drops.
+Success rates and processing-time figures are printed to stderr after
+analysis. ``experiments/exp2_verify_snr.py`` is a fast sanity check for
+each config's SNR before committing to the full batch.
 """
 from __future__ import annotations
 
@@ -51,6 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from experiments.lib import plotting
@@ -70,26 +66,21 @@ DEFAULT_NUM_REQUESTS = 200
 DEFAULT_INTER_REQUEST_DELAY_S = 1.0
 DEFAULT_RESPONSE_TIMEOUT_S = 5.0
 # Extra wait between the "Simulation running" banner and the first ranging
-# request. The banner prints as soon as enter_hil_mode() returns on every
-# modem, but the firmware then needs a beat to settle into its autonomous
-# TX/RX cycling — the very first request issued at t≈0 lands during that
-# settling window and is reliably lost. 5 s is enough headroom on this HW.
+# request. The firmware needs a beat to settle into its autonomous TX/RX
+# cycling after enter_hil_mode(); requests issued during that window are
+# dropped.
 DEFAULT_FIRST_REQUEST_DELAY_S = 5.0
 
-# Any single measurement whose absolute error exceeds this many metres is
-# treated as a firmware/implementation artifact rather than a channel-truth
-# measurement. The raw value is preserved in ranging_results.csv (with an
-# is_outlier=1 flag) but excluded from the violin plot and the
-# "inlier" statistics. 50 m is well clear of every plausible channel
-# residual at R=500 m (worst-case multipath excess delays produce <30 m of
-# apparent range error in our scenarios) and well below the kind of large
-# artifact value (e.g. ~180 m short due to CYCCNT-edge cases or
-# tonal-induced false sync) that ought to be flagged.
+# Single measurements with absolute error above this threshold are treated
+# as firmware/implementation artifacts (e.g. tonal-induced false sync).
+# Raw values are preserved in ranging_results.csv with is_outlier=1 but
+# excluded from the violin and inlier statistics. Set well above plausible
+# channel residuals at the configured range.
 DEFAULT_OUTLIER_THRESHOLD_M = 50.0
 
-# Sweep wall-clock budget per cell: 200 requests * (worst-case 5 s response
-# timeout + 1 s gap) = ~1200 s if every request times out. Add init/teardown
-# slack. Cells that finish 200 requests faster exit via stop_condition.
+# Per-cell wall-clock ceiling: worst case is ``num_requests * (response
+# timeout + inter-request delay)``. Cells that complete faster exit via
+# the stop_condition.
 DEFAULT_MAX_CELL_RUNTIME_S = 1800.0
 SIGTERM_GRACE_S = 6.0
 
@@ -102,11 +93,8 @@ RANGE_RE = re.compile(r"Range:\s*([-+]?\d+(?:\.\d+)?)\s*m")
 
 def parse_range_line(line: str) -> float | None:
     """Return the metres parsed out of a firmware ``Range: %.2fm`` print, or
-    ``None`` if ``line`` doesn't look like a range readout.
-
-    Tolerant of leading/trailing whitespace and surrounding text — the CDC
-    console's reader thread occasionally hands us a line where the range
-    is sandwiched between menu redraws.
+    ``None`` if ``line`` doesn't look like a range readout. Tolerant of
+    surrounding whitespace, menu redraws, and timestamp prefixes.
     """
     if not isinstance(line, str):
         return None
@@ -146,17 +134,14 @@ class RangingRecord:
 # ---------------------------------------------------------------------------
 
 class _RangingDriver:
-    """Per-cell ``pre_run``/``post_run`` glue.
+    """Per-cell ``pre_run`` / ``post_run`` glue.
 
     ``pre_run`` attaches a CDC console to each modem, waits for the
-    simulator's ready banner, and spawns a background worker thread that
-    issues ``num_requests`` ranging requests via modem A's CDC. The worker
-    appends ``RangingRecord`` rows to a per-cell list which is flushed to
-    ``requests.jsonl`` in ``post_run``.
-
-    The driver also exposes ``cell_done(cell_id)`` — used by the runner's
-    ``stop_condition`` to end the cell as soon as the worker finishes
-    (rather than waiting out the watchdog).
+    simulator's ready banner, and spawns a worker thread that issues
+    ``num_requests`` ranging requests via modem A's CDC. ``post_run``
+    flushes the per-cell ``RangingRecord`` list to ``requests.jsonl`` and
+    detaches the consoles. ``cell_done(cell_id)`` plugs into the runner's
+    ``stop_condition`` so cells end as soon as the worker finishes.
     """
 
     READY_PATTERN = re.compile(r"Simulation running")
@@ -240,9 +225,8 @@ class _RangingDriver:
         self._done_evts.pop(handle.cell_id, None)
 
     def cell_done(self, handle: CellHandle) -> bool:
-        """Used as a ``stop_condition``: returns True when the request
-        worker has issued (and waited on) all ``num_requests`` ranging
-        requests for ``handle.cell_id``."""
+        """``stop_condition`` hook: True once all ``num_requests`` have been
+        issued and waited on for ``handle.cell_id``."""
         evt = self._done_evts.get(handle.cell_id)
         return bool(evt and evt.is_set())
 
@@ -271,10 +255,8 @@ class _RangingDriver:
                       stop: threading.Event) -> None:
         records = self._records[cell_id]
         # Let the modem firmware settle into its autonomous TX/RX cycle
-        # before issuing the first ranging request. Without this, the
-        # first request lands during the settling window and is dropped —
-        # observed as a consistent ~2/(num_requests) loss in the verify
-        # script (one extra failure per cell, always request_id=0).
+        # before the first request, otherwise request_id=0 is consistently
+        # dropped.
         if self.first_request_delay_s > 0.0:
             stop.wait(self.first_request_delay_s)
         for i in range(self.num_requests):
@@ -288,8 +270,8 @@ class _RangingDriver:
                                  f"failed: {exc}\n")
                 records.append(RangingRecord(i, request_ts_ns,
                                              None, None, None))
-                # Even on send error, honour the inter-request delay so we
-                # don't busy-loop on a wedged TTY.
+                # Honour the inter-request delay on send error so we don't
+                # busy-loop on a wedged TTY.
                 stop.wait(self.inter_request_delay_s)
                 continue
             try:
@@ -302,7 +284,6 @@ class _RangingDriver:
             except TimeoutError:
                 records.append(RangingRecord(i, request_ts_ns,
                                              None, None, None))
-            # 1 s gap before next request (or stop early).
             stop.wait(self.inter_request_delay_s)
         done.set()
 
@@ -326,8 +307,8 @@ class ConfigAnalysis:
                          if r.range_m is not None], dtype=float)
 
     def errors_inlier(self, threshold_m: float) -> np.ndarray:
-        """Errors with |error| <= threshold — used for the violin plot
-        and the "inlier" statistics."""
+        """Errors with |error| <= threshold; backs the violin plot and the
+        inlier statistics."""
         return np.array([r.range_m - CONFIGURED_RANGE_M
                          for r in self.records
                          if r.range_m is not None
@@ -399,9 +380,8 @@ def _load_summary(cell_dir: Path) -> dict | None:
 
 
 def analyse(out_dir: Path) -> list[ConfigAnalysis]:
-    """Walk ``out_dir`` for per-config cell directories. Returns one
-    ``ConfigAnalysis`` per config that has a ``requests.jsonl`` file.
-    """
+    """Walk ``out_dir`` and return one ``ConfigAnalysis`` per discoverable
+    config cell directory."""
     out: list[ConfigAnalysis] = []
     for config_id in CONFIG_IDS:
         cell_dir = _find_cell_dir(out_dir, config_id)
@@ -414,12 +394,9 @@ def analyse(out_dir: Path) -> list[ConfigAnalysis]:
 
 
 def _find_cell_dir(out_dir: Path, config_id: str) -> Path | None:
-    """Find the cell directory for a given config inside ``out_dir``.
-
-    The runner names cells by a hash of the params dict, so we can't
-    predict the directory name without recomputing the hash. Easier: read
-    each cell's scenario.yaml and match by the ``name:`` field, which is
-    ``exp2_ranging_<config_id>`` per the template.
+    """Locate the cell directory for ``config_id`` by matching the
+    scenario YAML's ``name:`` field. Cell directory names are param-hash
+    based so they can't be derived from the config id directly.
     """
     target = f"exp2_ranging_{config_id}"
     for child in sorted(out_dir.iterdir()):
@@ -432,8 +409,6 @@ def _find_cell_dir(out_dir: Path, config_id: str) -> Path | None:
             text = scenario.read_text()
         except OSError:
             continue
-        # Plain string match — the name field is always on its own line in
-        # our templates, no need to round-trip YAML.
         if f"name: {target}\n" in text or f"name: {target}\r\n" in text:
             return child
     return None
@@ -500,13 +475,10 @@ def render_violin(analyses: list[ConfigAnalysis],
                   *,
                   outlier_threshold_m: float
                   = DEFAULT_OUTLIER_THRESHOLD_M) -> None:
-    """Single violin plot, one violin per config. No title, no in-figure
-    caption — success rates and outlier counts print to stderr.
-
-    Outliers (|error| > threshold) are excluded from the plotted
-    distribution so a single firmware-artifact value doesn't squash every
-    config's violin into a line; they're preserved in the CSV and
-    reported in the stderr summary.
+    """Render one violin per config. Outliers (|error| > threshold) are
+    excluded from the plotted distribution so a single artifact value
+    doesn't squash every config's violin; they remain in the CSV and
+    stderr summary.
     """
     values_by_cat = {a.config_id: a.errors_inlier(outlier_threshold_m)
                      for a in analyses}
@@ -518,6 +490,11 @@ def render_violin(analyses: list[ConfigAnalysis],
         x_label = "Channel configuration",
         y_label = "Range error (m)",
     )
+    ax = fig.axes[0]
+    base = plt.rcParams["font.size"]
+    ax.xaxis.label.set_fontsize(base * 1.5)
+    ax.yaxis.label.set_fontsize(base * 1.5)
+    ax.tick_params(axis="both", labelsize=base * 1.5)
     plotting.save_figure(fig, savepath)
 
 
@@ -540,8 +517,8 @@ def _run_one_config(*,
                     log_raw_rx: bool,
                     retries: int,
                     ) -> None:
-    """Run a single config as a one-cell Sweep so we get progress, retries,
-    and the watchdog for free."""
+    """Run one config as a single-cell Sweep so progress, retries, and the
+    watchdog are inherited from the runner."""
     driver = _RangingDriver(
         modem_a_serial          = modem_a_serial,
         modem_b_serial          = modem_b_serial,
@@ -553,7 +530,7 @@ def _run_one_config(*,
     sweep = Sweep(
         template_path     = template_path,
         # Keep ``config`` in the params dict so cell_id varies across
-        # configs even though only one cell renders per Sweep instance.
+        # configs even though each Sweep renders a single cell.
         parameters        = {"config": [config_id]},
         extra_params      = dict(
             modem_a_serial = modem_a_serial,
@@ -616,16 +593,15 @@ def _print_summary(analyses: list[ConfigAnalysis],
                     f"          request_id={o.request_id:3d}  "
                     f"range={o.range_m:.2f} m  err={err:+.2f} m\n"
                 )
-            # Also show the all-inclusive stats for transparency — anyone
-            # asking "what does the std look like if you keep them?" gets
-            # the answer here without having to reload the CSV.
+            # Also show all-inclusive stats so the no-filter answer doesn't
+            # require reloading the CSV.
             mean_all, std_all, *_ = _stats(errs_all)
             sys.stderr.write(
                 f"        all-inclusive stats (for disclosure): "
                 f"bias={mean_all:+.3f} m  std={std_all:.3f} m\n"
             )
 
-    sys.stderr.write("[exp2] processing-time table (Tab. 1):\n")
+    sys.stderr.write("[exp2] processing-time table:\n")
     for a in analyses:
         pt = (a.summary or {}).get("processing_time", {}) or {}
         sys.stderr.write(
@@ -665,7 +641,7 @@ def main(argv: list[str] | None = None) -> int:
                    default=DEFAULT_FIRST_REQUEST_DELAY_S,
                    help="additional wait after the simulator-ready banner "
                         "before the first request, to let the modem firmware "
-                        "finish settling into its autonomous TX/RX cycle "
+                        "settle into its autonomous TX/RX cycle "
                         f"(default {DEFAULT_FIRST_REQUEST_DELAY_S})")
     p.add_argument("--max-cell-runtime-s", type=float,
                    default=DEFAULT_MAX_CELL_RUNTIME_S,
@@ -676,15 +652,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--retries", type=int, default=0)
     p.add_argument("--log-raw-rx", action="store_true",
                    help="enable raw-RX WAV logging in every config (off by "
-                        "default — exp2 analysis only needs CDC range "
-                        "readouts, raw WAVs balloon disk usage)")
+                        "default; exp2 analysis only needs the CDC range "
+                        "readouts and raw WAVs balloon disk usage)")
     p.add_argument("--outlier-threshold-m", type=float,
                    default=DEFAULT_OUTLIER_THRESHOLD_M,
                    help="absolute-error threshold (metres) above which a "
-                        "measurement is flagged as is_outlier=1 in the CSV "
-                        "and excluded from the violin + inlier stats. The "
-                        "raw value is preserved; outliers are listed in the "
-                        f"stderr summary (default {DEFAULT_OUTLIER_THRESHOLD_M})")
+                        "measurement is flagged is_outlier=1 in the CSV and "
+                        "excluded from the violin + inlier stats. Outliers "
+                        "are preserved in the CSV and listed in the stderr "
+                        f"summary (default {DEFAULT_OUTLIER_THRESHOLD_M})")
     p.add_argument("--analysis-only", action="store_true",
                    help="don't run the sweep — only post-process artifacts "
                         "already present in --out")

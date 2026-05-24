@@ -1,16 +1,16 @@
 {#- Experiment 2 config (d): config (c) + two tonal interferers.
 
-Same geometric scene as (c), plus two narrowband tonal sources bracketing
-the 30 kHz modem fc (25 kHz, 35 kHz). Amplitudes calibrated so the
-in-band SNR at the receiver is moderate but the ranging packet remains
-demodulable.
+Same geometric scene as (c), plus two narrowband tones bracketing the
+30 kHz modem fc (25 kHz, 35 kHz). Amplitudes set so the in-band SNR is
+moderate but the ranging packet remains demodulable.
 
 Variables: same as config (a).
 -#}
 name: exp2_ranging_d
 description: >
-  Experiment 2 — config (d): config (c) with two tonal interferers at
-  25 kHz and 35 kHz overlaid on the Wenz sea state 3 noise.
+  Bidirectional ranging at R=500 m: config (c)'s 5-tap geometric scene
+  with two tonal interferers at 25 kHz and 35 kHz overlaid on the Wenz
+  sea state 3 noise.
 
 environment:
   sound_speed_m_s: 1500.0
@@ -43,8 +43,7 @@ channels:
   - from: modem_a
     to: modem_b
     range_m: 500.0
-    # Trim to keep modem B's ADC out of mild clipping (see config (b)
-    # for the empirical reasoning — same chain math at fc=31.5 kHz).
+    # Trim to keep modem B's ADC out of mild clipping (see config (b)).
     gain_db: -10.0
     mode: geometric
     initial_range_m: 500.0
@@ -65,8 +64,7 @@ channels:
   - from: modem_b
     to: modem_a
     range_m: 500.0
-    # Trim to keep modem B's ADC out of mild clipping (see config (b)
-    # for the empirical reasoning — same chain math at fc=31.5 kHz).
+    # Trim to keep modem B's ADC out of mild clipping (see config (b)).
     gain_db: -10.0
     mode: geometric
     initial_range_m: 500.0

@@ -22,13 +22,11 @@ public:
 //     sound_speed_m_s: 1500.0   # optional, default 1500
 //     saltwater: true            # optional, default true
 //     spreading_model: spherical # optional: spherical|cylindrical|hybrid
-//     # NOTE: center_freq_khz was removed; modem center frequency now comes
-//     # from each modem's firmware-reported calibration data.
 //
 //   modems:
 //     - id: modem_a
 //       usb_serial: "ABC123"
-//       transducer_id: "T-001"   # optional
+//       transducer_id: "T-001"
 //       clock_offset_ppm: 0.0    # optional
 //       velocity_radial_m_s: 0.0 # optional
 //
@@ -43,7 +41,7 @@ public:
 //
 //   noise:                       # optional section
 //     wenz_sea_state: 3
-//     min_margin_above_afe_db: 10.0   # default; PSD margin above AFE floor
+//     min_margin_above_afe_db: 10.0   # PSD margin above AFE floor
 //     disable: false                  # short-circuit ambient noise
 //     saltwater: true
 //     tonal_sources:             # optional
@@ -57,12 +55,14 @@ public:
 //     log_processed: false
 //     output_directory: "."
 //     file_format: wav
+//
+// Modem center frequency comes from each modem's firmware-reported
+// calibration data; `environment.center_freq_khz` is not accepted.
 class ScenarioLoader {
 public:
-    // Load from a YAML file path.
     static ScenarioConfig load(const std::string& filepath);
 
-    // Load from a YAML string (used in unit tests to avoid filesystem access).
+    // Load from an in-memory YAML string.
     static ScenarioConfig load_from_string(const std::string& yaml_text);
 };
 

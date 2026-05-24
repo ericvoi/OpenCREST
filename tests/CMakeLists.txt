@@ -19,7 +19,7 @@ macro(openCREST_unit_test name src)
     # fails with the well-known "unexpected memory mapping" kernel ASLR
     # issue. PRE_TEST defers discovery to ctest time, where the test can
     # be run via `setarch -R`.
-    if(OPENCRIEST_TSAN)
+    if(OPENCREST_TSAN)
         gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST)
     else()
         gtest_discover_tests(${name})
@@ -32,7 +32,7 @@ endmacro()
 macro(openCREST_integration_test name src)
     add_executable(${name} ${src})
     target_link_libraries(${name} PRIVATE openCREST_core test_helpers GTest::gtest_main)
-    if(OPENCRIEST_TSAN)
+    if(OPENCREST_TSAN)
         gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST)
     else()
         gtest_discover_tests(${name})

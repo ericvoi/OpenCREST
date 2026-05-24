@@ -11,10 +11,6 @@ using protocol::StatusPayload;
 using protocol::DATA_PACKET_BYTES;
 using protocol::DATA_SAMPLES_PER_PKT;
 
-// ---------------------------------------------------------------------------
-// Test setup
-// ---------------------------------------------------------------------------
-
 void MockTransport::set_calibration(const CalibrationData& cal) {
     calibration_ = cal;
 }
@@ -46,16 +42,11 @@ void MockTransport::enqueue_tx_waveform(const std::vector<uint16_t>& samples) {
 
 void MockTransport::schedule_state_transition(uint64_t delay_ms, ModemState next_state) {
     transitions_.push_back({sim_time_ms_ + delay_ms, next_state});
-    // Keep sorted ascending by time
     std::sort(transitions_.begin(), transitions_.end(),
               [](const Transition& a, const Transition& b) {
                   return a.time_ms < b.time_ms;
               });
 }
-
-// ---------------------------------------------------------------------------
-// Verification
-// ---------------------------------------------------------------------------
 
 const std::vector<MockTransport::DataPacket>& MockTransport::received_rx_packets() const {
     return rx_packets_;
@@ -68,10 +59,6 @@ uint64_t MockTransport::simulated_time_ms() const {
 ModemState MockTransport::current_state() const {
     return state_;
 }
-
-// ---------------------------------------------------------------------------
-// IModemTransport
-// ---------------------------------------------------------------------------
 
 bool MockTransport::open(const std::string& /*device_identifier*/) {
     is_open_ = true;
@@ -94,7 +81,7 @@ TransferResult MockTransport::send_data(const uint8_t* data, size_t len, int /*t
     const size_t n = std::min(len, DATA_PACKET_BYTES);
     std::memcpy(pkt.data(), data, n);
     rx_packets_.push_back(pkt);
-    ++rx_expected_id_;  // wraps at 65535 → 0; mirrors real firmware counter
+    ++rx_expected_id_;  // 16-bit wrap mirrors firmware counter
     return {TransferResult::Status::OK, static_cast<int>(n)};
 }
 
@@ -111,10 +98,9 @@ TransferResult MockTransport::recv_data(uint8_t* data, size_t len, int /*timeout
     std::memcpy(data, pkt.data(), n);
     tx_queue_.pop_front();
 
-    // Auto-transition: when TX waveform is exhausted, go to SETTLING
+    // Auto-transition TX → SETTLING → RX when the waveform drains.
     if (tx_queue_.empty() && state_ == ModemState::TX) {
         state_ = ModemState::SETTLING;
-        // Schedule automatic RX transition after settling time
         transitions_.push_back({sim_time_ms_ + settling_time_ms_, ModemState::RX});
         std::sort(transitions_.begin(), transitions_.end(),
                   [](const Transition& a, const Transition& b) {
@@ -164,7 +150,6 @@ TransferResult MockTransport::recv_control(uint8_t* data, size_t len, int timeou
         return {TransferResult::Status::DISCONNECTED, 0};
     }
 
-    // Advance simulated clock
     sim_time_ms_ += static_cast<uint64_t>(timeout_ms > 0 ? timeout_ms : 1);
     apply_transitions();
 
@@ -176,7 +161,6 @@ TransferResult MockTransport::recv_control(uint8_t* data, size_t len, int timeou
         return {TransferResult::Status::OK, static_cast<int>(n)};
     }
 
-    // Return status packet
     StatusPayload status{};
     status.type                  = static_cast<uint8_t>(protocol::ControlType::STATUS);
     status.modem_state           = static_cast<uint8_t>(state_);
@@ -186,20 +170,15 @@ TransferResult MockTransport::recv_control(uint8_t* data, size_t len, int timeou
     status.error_flags           = static_cast<uint8_t>(error_flags_);
     status.firmware_timestamp_ms = static_cast<uint32_t>(sim_time_ms_ & 0xFFFFFFFFu);
     status.rx_expected_id        = rx_expected_id_;
-    // In the mock, the fill measurement is always synchronous with rx_expected_id,
-    // so the most recently received packet (rx_expected_id - 1) is the reference.
+    // Mock fill is synchronous with rx_expected_id; the most recently
+    // received packet is the reference.
     status.fill_reference_id     = static_cast<uint16_t>(rx_expected_id_ - 1u);
 
     ProtocolCodec::encode_status(data, status);
     return {TransferResult::Status::OK, static_cast<int>(n)};
 }
 
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
 void MockTransport::apply_transitions() {
-    // Fire all transitions whose scheduled time has been reached
     while (!transitions_.empty() && transitions_.front().time_ms <= sim_time_ms_) {
         state_ = transitions_.front().state;
         transitions_.erase(transitions_.begin());

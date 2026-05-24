@@ -20,7 +20,7 @@ namespace openCREST {
 // Bridges between the modem's USB interface and the SPSC ring buffers shared
 // with the ChannelEngine. One ModemIO instance per modem.
 //
-// Polling loop (see architecture.md §9):
+// Polling loop:
 //   Every CONTROL_POLL_INTERVAL iterations: poll_control() → update runtime state
 //   If state == TX:  recv_data → push to tx_ring
 //   If state == RX:  pull from rx_ring, send_data (if pacer allows)
@@ -32,9 +32,9 @@ namespace openCREST {
 class ModemIO {
 public:
     // `receiver_mix`, `logger`, and `metrics` are optional; may be nullptr.
-    // `receiver_mix` is used by send_rx_data() to top up rx_ring on demand
-    // (one packet's worth at a time); when nullptr, ModemIO drains rx_ring
-    // as filled by an external producer (legacy / test mode).
+    // When `receiver_mix` is non-null, send_rx_data() pulls one packet at
+    // a time on demand. When null, ModemIO drains whatever an external
+    // producer has placed in rx_ring.
     ModemIO(Modem&                           modem,
             SPSCRingBuffer<uint16_t>&        tx_ring,
             SPSCRingBuffer<uint16_t>&        rx_ring,
@@ -55,20 +55,16 @@ public:
     // Expose gap count for metrics
     uint64_t sequence_gap_count() const { return codec_.gap_count(); }
 
-    // Accessors for ChannelEngine wiring (Phase 4 arrival alignment).
-    // The tracker tracks this modem's RX-buffer fill (host→modem
-    // direction); the estimator tracks when this modem started its
-    // current TX burst (modem→host direction). Both are queried by
-    // SourceWorker / ChannelEngine across modem pairs.
+    // Accessors for ChannelEngine wiring. The fill tracker covers the
+    // host→modem direction; the TX-start estimator covers the
+    // modem→host direction. Both are queried across modem pairs.
     IFillTracker&     fill_tracker()        { return *tracker_; }
     TxStartEstimator& tx_start_estimator()  { return tx_start_estimator_; }
 
-    // Print one diagnostic line for this modem's tracker state. Called
-    // from the Simulator's per-second metrics loop. Reads from atomic
-    // snapshots updated in handle_status / send_rx_data, so this is
-    // safe to invoke from a different thread. `elapsed_s` is the
-    // wall-clock interval since the previous print, used to compute
-    // per-modem RX pkt/s.
+    // Print one diagnostic line for this modem's tracker state. Reads
+    // atomic snapshots updated in handle_status / send_rx_data; safe
+    // to invoke from a different thread. `elapsed_s` is the wall-clock
+    // interval since the previous print.
     void print_metrics_line(double elapsed_s);
 
 private:
@@ -77,18 +73,15 @@ private:
     void receive_tx_data();
     void send_rx_data();
 
-    // Decode/sequence-check/forward a single TX packet sitting in data_buf_
-    // after a successful recv_data(). Shared between the steady-state TX
-    // path and the on-exit drain so trailing packets feed the channel
-    // pipeline identically to in-session ones.
+    // Decode + sequence-check + forward a single TX packet sitting in
+    // data_buf_. Shared between the steady-state path and on-exit drain.
     void process_tx_packet(int bytes_transferred);
 
-    // Pull any TX packets still parked in the modem's USB FIFO into the
-    // host before letting the state transition complete. The firmware's
-    // resetHil() does not actually discard pending TX data (TinyUSB's
-    // tud_vendor_n_write_flush stages rather than drops), so without this
-    // the last packet of one TX session would surface at the head of the
-    // next one and trip sequence-gap detection.
+    // Pull any TX packets still parked in the modem's USB FIFO before
+    // letting the TX→next state transition complete. The firmware's
+    // resetHil() stages rather than drops pending TX data, so without
+    // this drain the last packet of one TX session would surface at the
+    // head of the next.
     void drain_tx_pipeline();
 
     Modem&                    modem_;
@@ -108,17 +101,16 @@ private:
     uint16_t           tx_pkt_id_ = 0;    // Sequence ID for host→modem RX stream
     uint32_t           last_error_flags_ = 0;  // previous value, for transition logging
     bool               log_first_rx_send_ = true;  // one-shot tx_pkt_id_ log per RX entry
-    // First status after an RX entry shows pipeline-fill drift vs. the pre-reset
-    // prev value — a false positive. Skip the drop check on the very first
-    // status in each RX session; just seed the baseline.
+    // Skip drop check on the first status after each RX entry; the
+    // measured drift reflects in-flight pipeline depth, not drops.
     bool               skip_next_drift_check_ = true;
-    // Tracker's fallback-anchor count, observed last status. Used to
-    // compute the delta into the process-wide metric.
+    // Last-observed tracker fallback count; used to compute deltas
+    // into the process-wide metric.
     uint64_t           last_fallback_count_ = 0;
 
-    // Per-modem snapshots for the diagnostic line. Updated on each
-    // status (handle_status) / send-skip (send_rx_data); read by the
-    // Simulator main thread via print_metrics_line().
+    // Per-modem snapshots for the diagnostic line. Updated in
+    // handle_status / send_rx_data; read from another thread by
+    // print_metrics_line().
     std::atomic<uint16_t> last_fill_fw_{0};            // Modem-reported buffer_fill
     std::atomic<int32_t>  last_fill_est_{0};           // Tracker's extrapolated fill at last status
     std::atomic<uint32_t> last_modem_rate_{0};         // Tracker's EWMA-smoothed Fs estimate
@@ -127,20 +119,18 @@ private:
     std::atomic<uint64_t> rx_packets_sent_{0};         // Cumulative packets sent host→modem (this modem only)
     uint64_t              prev_rx_packets_sent_ = 0;   // Snapshot at last print, for per-modem pkt/s
 
-    // Pre-allocated scratch buffers (stack-allocated; size known at compile time)
+    // Pre-allocated scratch buffers
     alignas(64) uint8_t  data_buf_[DATA_PACKET_SIZE];
     alignas(64) uint8_t  ctrl_buf_[CONTROL_PACKET_SIZE];
 
     static constexpr int  CTRL_TIMEOUT_MS          = 1;
     static constexpr int  DATA_TIMEOUT_MS          = 1;
-    // Poll every 5 sends. Increasing this to reduce libusb-timeout overhead
-    // starved the pacer of fresh fill measurements and widened the window
-    // during which buffer state could drift between updates. Keep it tight.
+    // Keep tight: longer intervals starve the tracker of fresh fill
+    // measurements.
     static constexpr size_t CONTROL_POLL_INTERVAL  = 5;
 
-    // Bound on the on-exit TX-FIFO drain. The modem's TinyUSB TX FIFO holds
-    // a small handful of packets at most; 8 leaves headroom while keeping
-    // the worst-case wall time bounded (8 × TX_DRAIN_TIMEOUT_MS = 8 ms).
+    // On-exit TX-FIFO drain bound. Worst-case wall time:
+    // TX_DRAIN_MAX_ITERATIONS × TX_DRAIN_TIMEOUT_MS = 8 ms.
     static constexpr int  TX_DRAIN_MAX_ITERATIONS  = 8;
     static constexpr int  TX_DRAIN_TIMEOUT_MS      = 1;
 };

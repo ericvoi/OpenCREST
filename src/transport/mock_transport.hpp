@@ -13,77 +13,62 @@ namespace openCREST {
 
 // Queue-based deterministic mock transport for unit and integration tests.
 //
-// Simulates a single modem without USB hardware. Test code pre-loads a
-// TX waveform (as encoded 512-byte packets), configures the calibration
-// response, and optionally scripts timed state transitions. The mock
-// responds to host commands exactly as a real modem would.
+// Simulates one modem without USB hardware. Test code pre-loads a TX
+// waveform, configures calibration, and optionally scripts timed state
+// transitions; the mock responds to host commands as a real modem
+// would.
 //
-// Simulated clock: advanced by `timeout_ms` on each recv_control() call,
-// allowing state-transition scripts to fire without wall-clock delays.
+// Simulated clock advances by `timeout_ms` on each recv_control() call,
+// so scripted transitions fire without wall-clock delays.
 class MockTransport : public IModemTransport {
 public:
     using DataPacket = std::array<uint8_t, protocol::DATA_PACKET_BYTES>;
 
-    // -----------------------------------------------------------------------
-    // Test setup API
-    // -----------------------------------------------------------------------
-
-    // Set the calibration data returned in response to REQUEST_CALIBRATION.
+    // Calibration data returned in response to REQUEST_CALIBRATION.
     void set_calibration(const CalibrationData& cal);
 
-    // Enqueue pre-encoded 512-byte TX packets (modem → host direction).
-    // Once all packets are consumed while state == TX, the mock transitions
-    // to SETTLING automatically.
+    // Enqueue a pre-encoded 512-byte TX packet (modem → host). When the
+    // queue drains while state == TX, the mock auto-transitions to
+    // SETTLING.
     void enqueue_tx_packet(const DataPacket& pkt);
 
-    // Convenience: encode `samples` into as many 512-byte packets as needed
-    // and enqueue them all.
+    // Encode `samples` into 512-byte packets and enqueue them.
     void enqueue_tx_waveform(const std::vector<uint16_t>& samples);
 
-    // Schedule a state transition at a simulated time offset from now.
-    // Transitions fire during the next recv_control() call that advances
-    // past the scheduled time.
+    // Schedule a state transition at `delay_ms` from the current
+    // simulated time. Fires during the next recv_control() that passes
+    // the scheduled time.
     void schedule_state_transition(uint64_t delay_ms, ModemState next_state);
 
-    // Set initial modem state (default: IDLE). Must be called before open().
+    // Set initial state (default IDLE). Must be called before open().
     void set_initial_state(ModemState state);
 
-    // Set the settling period (default: 200 ms) used for automatic
-    // TX→SETTLING→RX transitions.
+    // Settling period for auto TX→SETTLING→RX transitions (default 200 ms).
     void set_settling_time_ms(uint64_t ms);
 
-    // -----------------------------------------------------------------------
-    // Verification API
-    // -----------------------------------------------------------------------
-
-    // Returns all RX packets received via send_data(), in order.
+    // All RX packets received via send_data(), in order.
     const std::vector<DataPacket>& received_rx_packets() const;
 
-    // Simulated wall-clock time in milliseconds (advanced by recv_control).
+    // Simulated wall-clock in ms (advanced by recv_control).
     uint64_t simulated_time_ms() const;
 
     ModemState current_state() const;
 
-    // -----------------------------------------------------------------------
     // IModemTransport
-    // -----------------------------------------------------------------------
-
     bool open(const std::string& device_identifier) override;
     void close() override;
     bool is_open() const override;
 
-    // Data interface
-    // send_data: capture RX packet (host → modem).
+    // Capture RX packet (host → modem).
     TransferResult send_data(const uint8_t* data, size_t len, int timeout_ms) override;
-    // recv_data: dequeue next TX packet (modem → host). Returns TIMEOUT if
-    //            state != TX or the TX queue is empty.
+    // Dequeue next TX packet (modem → host); TIMEOUT if state != TX or
+    // queue empty.
     TransferResult recv_data(uint8_t* data, size_t len, int timeout_ms) override;
 
-    // Control interface
-    // send_control: process host commands (calibration request, HIL mode, etc.).
+    // Process host commands (calibration request, HIL mode, ...).
     TransferResult send_control(const uint8_t* data, size_t len, int timeout_ms) override;
-    // recv_control: return a calibration response (if pending) or status packet.
-    //               Advances the simulated clock and fires scheduled transitions.
+    // Return a calibration response (if pending) or a status packet.
+    // Advances the simulated clock and fires scheduled transitions.
     TransferResult recv_control(uint8_t* data, size_t len, int timeout_ms) override;
 
 private:

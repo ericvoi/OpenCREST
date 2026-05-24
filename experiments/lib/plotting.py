@@ -1,8 +1,7 @@
 """Shared matplotlib helpers used by the experiment drivers.
 
-These are deliberately lightweight wrappers around matplotlib primitives;
-they bake in the figure size + font conventions the paper uses so each
-experiment plot has consistent style without per-experiment boilerplate.
+Lightweight wrappers around matplotlib primitives that bake in the paper's
+figure size + font conventions.
 """
 from __future__ import annotations
 
@@ -10,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib
-matplotlib.use("Agg")             # default to a non-interactive backend
+matplotlib.use("Agg")             # non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -25,7 +24,7 @@ _PAPER_RC = {
 
 
 def apply_paper_style() -> None:
-    """Install the paper-style rcParams onto matplotlib globally."""
+    """Install paper-style rcParams onto matplotlib globally."""
     for k, v in _PAPER_RC.items():
         plt.rcParams[k] = v
 
@@ -34,6 +33,7 @@ def save_figure(fig: matplotlib.figure.Figure,
                 path: str | Path,
                 *,
                 tight: bool = True) -> Path:
+    """Write ``fig`` to ``path`` (creating parent dirs) and close it."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     if tight:
@@ -52,15 +52,26 @@ def waterfall(grid: np.ndarray,
               y_label: str = "",
               cbar_label: str = "",
               title: str = "",
+              log_db: bool = False,
+              vmin: float | None = None,
+              vmax: float | None = None,
               savepath: str | Path | None = None) -> matplotlib.figure.Figure:
     """Render a 2D intensity grid as a waterfall (pcolormesh).
 
-    ``grid`` has shape ``(len(y_axis), len(x_axis))``. Used by Exp 1 for
-    delay-vs-range cross-correlation magnitude.
+    ``grid`` has shape ``(len(y_axis), len(x_axis))``. With ``log_db=True``
+    the grid is converted to ``20*log10(|grid|)`` before plotting and
+    ``vmin``/``vmax`` are interpreted in dB; the floor is clamped to
+    ``10**(vmin/20)`` so the colormap clips cleanly.
     """
     apply_paper_style()
     fig, ax = plt.subplots()
-    mesh = ax.pcolormesh(x_axis, y_axis, grid, cmap=cmap, shading="auto")
+    if log_db:
+        floor_lin = 10.0 ** ((vmin if vmin is not None else -60.0) / 20.0)
+        plot_grid = 20.0 * np.log10(np.maximum(grid, floor_lin))
+    else:
+        plot_grid = grid
+    mesh = ax.pcolormesh(x_axis, y_axis, plot_grid, cmap=cmap, shading="auto",
+                         vmin=vmin, vmax=vmax)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.set_title(title)
@@ -82,10 +93,9 @@ def overlay_tap_lines(fig: matplotlib.figure.Figure,
 
     ``delays_per_path`` maps path name -> array of excess delays (in the
     same x-unit as the waterfall x-axis, default milliseconds) aligned
-    with ``ranges_m``. Path names get distinct colours and labels so the
-    legend matches the paper's Fig. 2.
+    with ``ranges_m``. Path names get distinct colours and labels.
     """
-    palette = {"direct": "white", "surface": "tab:cyan", "bottom": "tab:orange"}
+    palette = {"direct": "tab:red", "surface": "white", "bottom": "tab:orange"}
     if colors:
         palette.update(colors)
     if not fig.axes:
@@ -105,7 +115,7 @@ def ecdf(values: np.ndarray,
          title: str = "",
          savepath: str | Path | None = None
          ) -> matplotlib.figure.Figure:
-    """Empirical CDF curve. Used by Exp 2 (processing-time distribution)."""
+    """Empirical CDF curve."""
     apply_paper_style()
     v = np.asarray(values, dtype=float)
     v = v[~np.isnan(v)]
@@ -129,18 +139,16 @@ def violin_by_category(values_by_category: dict[str, np.ndarray],
                        x_label: str = "",
                        savepath: str | Path | None = None
                        ) -> matplotlib.figure.Figure:
-    """Violin plot with one violin per category — used by Exp 2 for the
-    range-error distribution across the four channel configurations.
+    """Violin plot with one violin per category.
 
     ``values_by_category`` maps category label -> array of samples. ``order``
-    pins category order on the x-axis; default is sorted insertion order.
+    pins category order on the x-axis; default is insertion order.
     """
     apply_paper_style()
     labels = order if order is not None else list(values_by_category.keys())
     data = [np.asarray(values_by_category[k], dtype=float) for k in labels]
-    # matplotlib's violinplot rejects empty arrays — substitute a single-NaN
-    # array so the slot is preserved on the x-axis (caller can tell that
-    # category was empty from the missing body).
+    # matplotlib's violinplot rejects empty arrays; substitute a single-NaN
+    # array so the slot is preserved on the x-axis.
     data = [d[~np.isnan(d)] if d.size else np.array([np.nan]) for d in data]
 
     fig, ax = plt.subplots()
@@ -164,8 +172,7 @@ def per_vs_range(ranges_m: np.ndarray,
                  ax: matplotlib.axes.Axes | None = None,
                  savepath: str | Path | None = None
                  ) -> matplotlib.figure.Figure:
-    """Packet-error-rate vs range, suitable for overlay across sea states.
-    Used by Exp 3."""
+    """Packet-error-rate vs range, suitable for overlay across categories."""
     apply_paper_style()
     if ax is None:
         fig, ax = plt.subplots()

@@ -43,13 +43,9 @@ double measured_amp_psd_dbfs(const std::vector<float>& signal,
 
 } // namespace
 
-// ===========================================================================
-// Empirical: NoiseGenerator output PSD at fc matches the configured target
-// PSD that psd_target_to_total_rms_dbfs derived. This is the load-bearing
-// invariant for Phase C — if it drifts, Wenz/AFE comparisons in
-// simulator.cpp produce nonsensical boost values.
-// ===========================================================================
-
+// NoiseGenerator output PSD at fc matches the target PSD that
+// psd_target_to_total_rms_dbfs derived — the invariant Wenz/AFE comparisons
+// in simulator.cpp rely on.
 TEST(NoiseLevels, OutputPsdAtFcMatchesTarget) {
     constexpr float fs = 500'000.0f;
     constexpr float fc = 31'500.0f;
@@ -83,8 +79,7 @@ TEST(NoiseLevels, OutputPsdAtFcMatchesTarget) {
 }
 
 TEST(NoiseLevels, OutputPsdAtFcSurvivesTwoTargets) {
-    // Repeat at a different target to verify the relationship is linear (a
-    // 20 dB target shift should produce a 20 dB measured shift).
+    // Two targets: a 20 dB target shift produces a 20 dB measured shift.
     constexpr float fs = 500'000.0f;
     constexpr float fc = 31'500.0f;
     constexpr int   ss = 3;
@@ -113,11 +108,8 @@ TEST(NoiseLevels, OutputPsdAtFcSurvivesTwoTargets) {
     EXPECT_NEAR(m_hi,  -80.0, 1.5);
 }
 
-// ===========================================================================
-// Empirical: psd_target_to_total_rms_dbfs hits the target at frequencies far
-// from the shaping filter's spectral peak. Catches |H(fc)| handling errors.
-// ===========================================================================
-
+// psd_target_to_total_rms_dbfs hits the target far from the shaping
+// filter's spectral peak — catches |H(fc)| handling errors.
 TEST(NoiseLevels, OutputPsdMatchesTargetOffShapingPeak) {
     constexpr float fs = 500'000.0f;
     constexpr int   ss = 3;
@@ -145,11 +137,9 @@ TEST(NoiseLevels, OutputPsdMatchesTargetOffShapingPeak) {
     EXPECT_NEAR(measured, target_psd_dbfs, 1.5);
 }
 
-// Sweep across the (ss, fc) operating points the production YAMLs use and
+// Sweep across (ss, fc) operating points the production YAMLs use and
 // verify the at-fc output PSD matches target. Catches ss-dependent biases
-// that the single-point ss=3 / fc=31.5 kHz pin would miss — e.g. if the
-// 32-tap Hann-windowed shape happens to under-represent the spectral peak
-// at low sea states.
+// in the 32-tap Hann-windowed shape that a single-point pin would miss.
 TEST(NoiseLevels, OutputPsdAtFcMatchesTargetAcrossSeaStates) {
     constexpr float fs = 500'000.0f;
     constexpr float fc = 31'500.0f;

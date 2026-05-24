@@ -26,14 +26,13 @@ void NoiseGenerator::init_shaping_filter(const NoiseConfig& config,
     const size_t M = shaping_coeffs_.size();
     filter_state_.assign(M - 1, 0.0f);
 
-    // Compute the expected RMS of the filtered white noise:
-    //   σ_out² = σ_in² · Σ h[k]²  (for unit-variance input, σ_in² = 1)
+    // Expected RMS of the filtered white noise (σ_in² = 1):
+    //   σ_out² = Σ h[k]²
     float energy = 0.0f;
     for (float c : shaping_coeffs_) energy += c * c;
     const float sigma_out = (energy > 0.0f) ? std::sqrt(energy) : 1.0f;
 
-    // Scale factor maps unit-variance shaped noise to the target dBFS level.
-    //   target_rms = 10^(target_level_db_re_fs / 20)
+    // Scale unit-variance shaped noise to the target dBFS level.
     const float target_rms = std::pow(10.0f, config.target_level_db_re_fs / 20.0f);
     output_scale_ = target_rms / sigma_out;
 }
@@ -57,19 +56,16 @@ void NoiseGenerator::generate(float* output, size_t count) {
     const size_t M = shaping_coeffs_.size();
 
     for (size_t i = 0; i < count; ++i) {
-        // --- Wenz-shaped noise ---
-        // Push a new white-noise sample through the FIR filter.
+        // Wenz-shaped noise: push a new white sample through the FIR.
+        // filter_state_ holds the last (M-1) white samples.
         const float white = gaussian_(rng_);
 
-        // Shift state right and insert new sample at position 0.
-        // filter_state_ holds the last (M-1) white samples.
         float y = shaping_coeffs_[0] * white;
         for (size_t k = 1; k < M; ++k) {
             y += shaping_coeffs_[k] * ((k - 1 < filter_state_.size())
                                         ? filter_state_[k - 1]
                                         : 0.0f);
         }
-        // Shift: oldest sample falls off the back
         for (size_t k = filter_state_.size(); k-- > 1; ) {
             filter_state_[k] = filter_state_[k - 1];
         }
@@ -77,11 +73,11 @@ void NoiseGenerator::generate(float* output, size_t count) {
 
         output[i] = y * output_scale_;
 
-        // --- Tonal sources ---
+        // Tonal sources.
         for (auto& osc : tonals_) {
             float amp = osc.amplitude;
             if (osc.bw_phase_inc > 0.0f) {
-                // Narrowband: modulate amplitude with a cosine dither
+                // Narrowband: amplitude modulated by a cosine dither.
                 amp *= 0.5f * (1.0f + std::cos(osc.bw_phase));
                 osc.bw_phase += osc.bw_phase_inc;
                 if (osc.bw_phase > TWO_PI) osc.bw_phase -= TWO_PI;

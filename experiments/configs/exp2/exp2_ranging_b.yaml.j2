@@ -1,15 +1,15 @@
 {#- Experiment 2 config (b): 3 static taps + Doppler + clock offset + noise.
 
-Static-mode multipath (3 taps from loopback_multipath.yaml, scaled to
-R=500 m), bulk Farrow Doppler from a 1 m/s radial velocity on modem A,
-50 ppm clock offset on modem A, Wenz sea state 3 ambient noise.
+Static-mode multipath (3 taps, scaled to R=500 m), bulk Farrow Doppler
+from a 1 m/s radial velocity on modem A, 50 ppm clock offset on modem A,
+Wenz sea state 3 ambient noise.
 
 Variables: same as config (a).
 -#}
 name: exp2_ranging_b
 description: >
-  Experiment 2 — config (b): R=500 m with 3-tap static multipath, bulk
-  Farrow Doppler (1 m/s + 50 ppm), Wenz sea state 3 noise.
+  Bidirectional ranging at R=500 m with 3-tap static multipath, bulk Farrow
+  Doppler (1 m/s + 50 ppm clock offset), and Wenz sea state 3 noise.
 
 environment:
   sound_speed_m_s: 1500.0
@@ -44,9 +44,8 @@ channels:
   - from: modem_a
     to: modem_b
     range_m: 500.0
-    # Trim to keep modem B's ADC out of mild clipping (verify showed
-    # SNR(rx_b) ~34 dB at gain_db=0; verify confirmed clipping but not
-    # catastrophic. -10 dB lands SNR(rx_b) ~24 dB, comfortably linear).
+    # Trim to keep modem B's ADC out of mild clipping; lands SNR(rx_b)
+    # comfortably in the linear region.
     gain_db: -10.0
     multipath_taps:
       - delay_s: 0.000
@@ -62,9 +61,8 @@ channels:
   - from: modem_b
     to: modem_a
     range_m: 500.0
-    # Trim to keep modem B's ADC out of mild clipping (verify showed
-    # SNR(rx_b) ~34 dB at gain_db=0; verify confirmed clipping but not
-    # catastrophic. -10 dB lands SNR(rx_b) ~24 dB, comfortably linear).
+    # Trim to keep modem B's ADC out of mild clipping; lands SNR(rx_b)
+    # comfortably in the linear region.
     gain_db: -10.0
     multipath_taps:
       - delay_s: 0.000

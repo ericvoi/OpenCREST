@@ -5,39 +5,32 @@
 namespace openCREST::dsp {
 
 // Frequency-dependent transducer response (TVR on transmit, RVR on
-// receive). MVP ships a frequency-flat implementation; a future FIR-based
+// receive). Currently a frequency-flat implementation; a FIR-based
 // implementation can be substituted at every call site without source
 // changes.
 //
 // Ordering when chained with Doppler:
-//   - On the source side, apply TVR *before* the Farrow resampler. The
-//     transducer's frequency response acts on the radiated waveform; the
-//     Doppler shift then operates on the already-coloured spectrum.
-//   - On the receiver side, apply RVR *after* the Farrow resampler. The
-//     received pressure is already Doppler-shifted at the listener; the
-//     transducer's response colours that spectrum.
-//   For a flat (frequency-independent) response the order is irrelevant
-//   because constant gain commutes with resampling.
+//   - Source side: apply TVR *before* the Farrow resampler. The
+//     transducer colours the radiated waveform; Doppler then shifts the
+//     already-coloured spectrum.
+//   - Receiver side: apply RVR *after* the Farrow resampler. Received
+//     pressure is already Doppler-shifted; the transducer colours that.
+// For a flat response the order is irrelevant.
 class TransducerResponse {
 public:
     virtual ~TransducerResponse();
 
-    // Effective gain (dB) at a single frequency. For frequency-flat
-    // responses this is constant; for FIR-based responses this reads the
-    // |H(f)| at the given frequency.
+    // Effective gain (dB) at a single frequency.
     [[nodiscard]] virtual float gain_db_at(float freq_hz) const = 0;
 
-    // Apply the response to `n` consecutive samples in-place-friendly form
-    // (`out` may alias `in`). For a flat response this multiplies by a
-    // precomputed linear gain. For a FIR response this convolves the
-    // input with the impulse response (state-bearing impls must declare
-    // their own state-management contract).
+    // Apply the response to `n` consecutive samples. `out` may alias
+    // `in`. Flat: multiply. FIR: convolve (state-bearing impls must
+    // declare their own state contract).
     virtual void apply(const float* in, float* out, std::size_t n) const = 0;
 };
 
-// Frequency-flat response — single dB scalar. The constructor caches the
-// linear gain so apply() is a tight multiply loop, and gain_db_at()
-// returns the configured dB value at any frequency.
+// Frequency-flat response — single dB scalar; constructor caches the
+// linear gain so apply() is a tight multiply loop.
 class FlatResponse final : public TransducerResponse {
 public:
     explicit FlatResponse(float gain_db) noexcept

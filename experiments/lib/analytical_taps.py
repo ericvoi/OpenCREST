@@ -1,13 +1,9 @@
-"""Method-of-images path delays for the §4.2 channel-validation overlay.
+"""Method-of-images path delays for the direct / surface / bottom paths.
 
-Mirrors ``src/channel/geometric_scene.cpp::compute_paths`` for the
-direct / surface / bottom paths used in Experiment 1. The C++ scene
-math is the ground truth; this is a hand-rolled Python copy that the
-exp1 driver unit-tests against a one-shot C++ reference output.
-
-Delays returned are *excess delays over the direct path* (matches the
-simulator's tap-delay semantics and the cross-correlation peak relative
-to the direct-path peak).
+Mirrors ``src/channel/geometric_scene.cpp::compute_paths``; the C++
+implementation is the ground truth. Delays returned are *excess delays
+over the direct path*, matching both the simulator's tap-delay semantics
+and the cross-correlation peak relative to the direct-path peak.
 """
 from __future__ import annotations
 
@@ -20,7 +16,7 @@ class AnalyticalTap:
     name: str            # "direct" | "surface" | "bottom"
     length_m: float
     excess_delay_s: float
-    excess_delay_samples: float    # = excess_delay_s * fs_hz
+    excess_delay_samples: float
 
 
 def path_lengths(range_m: float,
@@ -29,13 +25,8 @@ def path_lengths(range_m: float,
                  source_depth_m: float,
                  receiver_depth_m: float,
                  ) -> dict[str, float]:
-    """Slant-range path lengths for direct / surface / bottom rays.
-
-    Eq. (1) image-method form:
-        ℓ_direct  = √(R² + (z_s − z_r)²)
-        ℓ_surface = √(R² + (z_s + z_r)²)
-        ℓ_bottom  = √(R² + ((D − z_s) + (D − z_r))²)
-    """
+    """Slant-range path lengths for direct / surface / bottom rays via the
+    method of images."""
     R = float(range_m)
     zs, zr, D = float(source_depth_m), float(receiver_depth_m), float(water_depth_m)
     dz_direct  = zs - zr
@@ -57,11 +48,9 @@ def analytical_taps(range_m: float,
                     fs_hz: float = 500_000.0,
                     paths: Sequence[str] = ("direct", "surface", "bottom"),
                     ) -> list[AnalyticalTap]:
-    """Excess-over-direct delays (and sample counts) for the requested paths.
-
-    Returned in *increasing-delay* order, which for the default geometry
-    happens to be direct -> bottom -> surface but can flip in other
-    configurations — callers should not assume a fixed name order.
+    """Excess-over-direct delays (and sample counts) for the requested paths,
+    sorted by increasing delay. Callers should not assume a fixed name order
+    since the bottom/surface ordering depends on geometry.
     """
     lengths = path_lengths(range_m,
                            water_depth_m   = water_depth_m,
@@ -89,6 +78,5 @@ def analytical_taps(range_m: float,
 
 
 def _hypot(a: float, b: float) -> float:
-    # Avoid numpy import for a function this hot in tests.
     from math import sqrt
     return sqrt(a * a + b * b)

@@ -59,9 +59,7 @@ transducers:
     rvr_db: -178.0
 ```
 
-MVP ships flat (frequency-independent) values. The `TransducerResponse`
-abstract interface is in place so a future per-frequency lookup table or FIR
-drops in without touching call sites.
+Flat (frequency-independent) values.
 
 The loader validates that every `modems[].transducer_id` refers to an entry
 defined here.
@@ -172,7 +170,7 @@ processing block from the instantaneous horizontal range
 modem). Doppler from radial motion emerges **naturally** as the direct-path
 `delta_samples` shrinks (closing) or grows (opening); the bulk Farrow
 resampler ratio drops its `(1 + v/c)` factor in geometric mode (clock-offset
-still applies). Sub-sample Doppler refinement is a Session-C concern.
+still applies).
 
 ```yaml
 channels:
@@ -239,9 +237,8 @@ noise:
                                     # noise of given bandwidth
 ```
 
-`noise.level_above_noise_floor_db` is **rejected** by the loader (the
-schema breaking change landed in Phase C). Replace with
-`min_margin_above_afe_db` and/or `disable`.
+`noise.level_above_noise_floor_db` is **rejected** by the loader. Replace
+with `min_margin_above_afe_db` and/or `disable`.
 
 The boost decision happens per receiver, not per channel. If two channels
 land into the same receiver, they share the same boost.
@@ -268,7 +265,7 @@ names include the modem id, stream direction, and a timestamp.
 
 - Every parse error throws `openCREST::ScenarioLoadError` with a message
   pointing at the offending field.
-- Schema regressions (legacy keys, missing requireds) are explicit errors,
+- Schema regressions (unknown keys, missing requireds) are explicit errors,
   not silent defaults — the loader is intentionally conservative because a
   bad scenario can produce signals that look plausible but are physically
   wrong.

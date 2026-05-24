@@ -276,15 +276,9 @@ TEST(SourceWorker, ScattersToMultipleOutgoingChannels) {
 // Multiple TX cycles: each begins a new message in the PairBuffer
 // ===========================================================================
 
-// ===========================================================================
-// Back-to-back messages: SourceWorker passes gap=0 to PairBuffer so message 2
-// lands immediately after message 1's committed watermark, regardless of how
-// much wall-clock time elapsed between the two TX windows. Wall-clock-fidelity
-// gap handling is a planned redesign — the previous "advance write_origin by
-// wall-clock × sample_rate" approach caused PairBuffer overflow in multi-modem
-// scenarios because the receiver only drains during its own RX state.
-// ===========================================================================
-
+// SourceWorker passes gap=0 to PairBuffer; message 2 lands immediately
+// after message 1's committed watermark, regardless of wall-clock idle
+// between TX windows.
 TEST(SourceWorker, ConsecutiveTxWindowsAppendInReceiverTime) {
     ModemRuntimeState rt;
     rt.state.store(ModemState::IDLE, std::memory_order_relaxed);

@@ -12,10 +12,8 @@ namespace openCREST::logging {
 
 namespace {
 
-// When the simulator runs under `sudo` (effective UID 0), files and
-// directories it creates default to root ownership, which leaves the
-// invoking user unable to delete or edit them between runs. If
-// SUDO_UID / SUDO_GID are present, hand the path back to that user.
+// When running under sudo, hand newly-created files back to the invoking
+// user via SUDO_UID / SUDO_GID so they remain editable between runs.
 // Best effort — failures are debug-logged, never fatal.
 void chown_to_invoking_user(const std::filesystem::path& p) {
     if (::geteuid() != 0) return;
@@ -47,7 +45,6 @@ StreamLogger::StreamLogger(const LoggingConfig& config,
         return;  // Logging disabled; writers stay empty
     }
 
-    // Ensure output directory exists
     if (!config_.output_directory.empty()) {
         std::error_code ec;
         std::filesystem::create_directories(config_.output_directory, ec);
@@ -61,10 +58,8 @@ StreamLogger::StreamLogger(const LoggingConfig& config,
 
     const std::string& dir = config_.output_directory;
 
-    // Remove every .wav file from prior runs so the new session's logs
-    // aren't mixed with stale data. Restricted to .wav so user-generated
-    // artifacts (analysis plots, notes, etc.) in the same directory are
-    // preserved.
+    // Wipe .wav files from prior runs so new-session logs aren't mixed with
+    // stale data. Restricted to .wav so user artifacts (plots, notes) survive.
     {
         const std::filesystem::path root = dir.empty() ? "." : dir;
         std::error_code ec;
@@ -126,7 +121,7 @@ void StreamLogger::begin_rx_session(const std::string& modem_id) {
     if (!config_.log_raw_rx) return;
 
     auto it = rx_writers_.find(modem_id);
-    if (it == rx_writers_.end()) return;   // unknown modem
+    if (it == rx_writers_.end()) return;
 
     if (it->second) it->second->finalize();
 

@@ -6,22 +6,15 @@ namespace openCREST::dsp {
 
 // State of one multipath tap over the duration of one output block.
 //
-// `tap_delay_samples_at_block_*` are in source-rate sample units
-// (the same units as SourceDelayLine::producer_position). They are
-// fractional. Linearly evolving the delay across the block is what
-// creates path-specific Doppler — the read position advances at a
-// rate other than 1 source sample per output sample.
+// `tap_delay_samples_at_block_*` are fractional source-rate sample units
+// (same units as SourceDelayLine::producer_position). Linearly evolving
+// the delay across the block creates path-specific Doppler — the read
+// position advances at a rate other than 1 source sample per output
+// sample.
 //
-// `amplitude_at_block_*` are the per-tap real-valued amplitude
-// (path-loss × tap-gain × AFE chain). Lerp'd across the block so
-// smooth range changes (e.g. R(t)) modulate the receiver level
-// continuously rather than stepping every block.
-//
-// Future extension (Session H+): a complex amplitude pair could be
-// added here to model surface-wave-induced phase modulation without
-// full ray tracing off the wave field. Keep this struct trivially
-// extensible — do not introduce fields beyond what current geometric
-// mode needs.
+// `amplitude_at_block_*` are the per-tap real amplitude
+// (path-loss × tap-gain × AFE chain). Lerp'd across the block so smooth
+// range changes (R(t)) modulate the receiver level continuously.
 struct TapState {
     double tap_delay_samples_at_block_start = 0.0;
     double tap_delay_samples_at_block_end   = 0.0;
@@ -29,16 +22,12 @@ struct TapState {
     float  amplitude_at_block_end           = 0.0f;
 };
 
-// Output-driven per-tap interpolator.
+// Output-driven per-tap interpolator. Stateless.
 //
 // produce() writes exactly `n_out` samples into `out`, OVERWRITING any
-// prior contents. The caller (Channel) then scatter-adds `out` into
-// the destination PairBuffer — additive across taps so each receiver-
-// time slot accumulates contributions from every multipath arrival.
-//
-// PerTapFarrow has no per-instance state; all timing lives in the
-// SourceDelayLine (one per channel) and the TapState (one pair per tap
-// per block).
+// prior contents. The caller (Channel) then scatter-adds `out` into the
+// destination PairBuffer — additive across taps so each receiver-time
+// slot accumulates contributions from every multipath arrival.
 class PerTapFarrow {
 public:
     // For each output sample i ∈ [0, n_out):
@@ -48,11 +37,9 @@ public:
     //   amp       = lerp(amp_start, amp_end, α)
     //   out[i]    = amp · src.read_at(pos)
     //
-    // out_pos_start is in source-rate sample units. Clock-offset rate
-    // conversion is folded into TapState by the caller (Channel)
-    // before invoking produce(), so this loop stays uniform.
-    //
-    // No-op when n_out == 0.
+    // out_pos_start is in source-rate sample units. Any clock-offset rate
+    // conversion is folded into TapState by the caller before calling
+    // produce(), so this loop stays uniform. No-op when n_out == 0.
     static void produce(const SourceDelayLine& src,
                         const TapState&        tap,
                         double                 out_pos_start,

@@ -1,9 +1,8 @@
 """Unit tests for the Exp 2 ``Range: %.2fm`` line parser.
 
-The CDC reader emits lines that occasionally have surrounding terminal
-control sequences, prompt redraws, or trailing whitespace; the parser
-needs to recover the metric value from any of those without false-
-positive matches on unrelated lines."""
+CDC lines may carry terminal control sequences, prompt redraws, or
+trailing whitespace; the parser must recover the metric value without
+false positives on unrelated lines."""
 from __future__ import annotations
 
 import pytest

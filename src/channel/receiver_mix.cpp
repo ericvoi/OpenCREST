@@ -23,25 +23,20 @@ ReceiverMix::ReceiverMix(std::vector<PairBuffer*> incoming,
 size_t ReceiverMix::pull(SPSCRingBuffer<uint16_t>& rx_ring, size_t count) {
     if (count == 0) return 0;
 
-    // Process in chunks no larger than the scratch buffers. This caps
-    // per-call memory use and lets very large `count` values work even
-    // though scratch was sized for one PROCESSING_BLOCK_SIZE block.
+    // Chunk into scratch-sized blocks so very large `count` values work.
     size_t total_accepted = 0;
     while (count > 0) {
         const size_t chunk = std::min(count, sum_scratch_.size());
 
-        // 1. Sum incoming PairBuffer contributions (zero scratch first).
+        // 1. Sum incoming PairBuffer contributions.
         std::memset(sum_scratch_.data(), 0, chunk * sizeof(float));
         for (auto* pb : incoming_) {
-            // PairBuffer::read_advance returns however many samples were
-            // available — the producer's clock may be slightly behind, in
-            // which case the missing samples are silence (0). Guarantee
-            // exactly `chunk` summed samples by zero-filling the gap.
+            // Missing samples (producer behind) stay at 0 from the memset,
+            // so the receiver sees silence for the gap.
             const size_t got = pb->read_advance(pair_scratch_.data(), chunk);
             for (size_t i = 0; i < got; ++i) {
                 sum_scratch_[i] += pair_scratch_[i];
             }
-            // If got < chunk, those positions stay at 0 from the memset.
         }
 
         // 2. Add receiver-specific ambient noise.
@@ -50,15 +45,13 @@ size_t ReceiverMix::pull(SPSCRingBuffer<uint16_t>& rx_ring, size_t count) {
             sum_scratch_[i] += noise_scratch_[i];
         }
 
-        // 3. Convert float → DAC samples (clamps; never wraps).
+        // 3. Convert to DAC samples (clamps; never wraps).
         const uint8_t dac_bits = rcv_cal_.dac_bits;
         for (size_t i = 0; i < chunk; ++i) {
             dac_scratch_[i] = float_to_dac(sum_scratch_[i], dac_bits);
         }
 
-        // 4. Best-effort write to rx_ring. If the ring is full, the reader
-        //    is too slow; we drop the excess but still advanced the
-        //    PairBuffer read heads above.
+        // 4. Best-effort write to rx_ring; excess is counted as drops.
         const size_t accepted = rx_ring.write(dac_scratch_.data(), chunk);
         total_accepted += accepted;
         if (accepted < chunk) {

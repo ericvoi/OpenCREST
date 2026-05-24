@@ -1,9 +1,9 @@
 name: loopback_identity
 description: >
-  Single modem loopback with a truly transparent channel: no delay, no gain,
-  no path loss, no noise, no multipath. If TX and RX wav files do not
-  correlate in this scenario, the issue is definitively in the host pipeline
-  or transport — not in the channel DSP.
+  Single-modem loopback with a transparent channel: no delay, no gain,
+  no path loss, no noise, no multipath. If TX and RX WAVs don't correlate
+  in this scenario, the fault is in the host pipeline or transport rather
+  than the channel DSP.
 
 environment:
   sound_speed_m_s: 1500.0
@@ -12,7 +12,7 @@ environment:
 
 transducers:
   T-001:
-    tvr_db: 152.0     # plausible mid-band transducer; refine when real data lands
+    tvr_db: 152.0     # placeholder mid-band transducer
     rvr_db: -180.0
 
 modems:
@@ -24,19 +24,18 @@ modems:
 channels:
   - from: modem_a
     to: modem_a
-    range_m: 1         # zero range → zero path loss
-    # At 1 m the chain has zero TL but still carries the +103 dB of voltage
-    # anchors + attenuation un-do + (TVR + RVR = -28). Net chain ≈ +75 dB;
-    # cancel for true identity passthrough. Adjust if the underlying
-    # CalibrationData / transducer placeholder is updated.
+    range_m: 1         # near-zero range
+    # Cancel the residual chain gain (voltage anchors + attenuation un-do
+    # + TVR/RVR) so the loopback is a true identity passthrough. Adjust if
+    # the transducer placeholder is updated.
     gain_db: -75.0
     multipath_taps:
-      - delay_s: 0.0     # zero delay
-        gain_db: 0.0     # unity gain
+      - delay_s: 0.0
+        gain_db: 0.0
         phase_deg: 0.0
 
 noise:
-  disable: true                # transparent loopback — no ambient noise
+  disable: true                # transparent loopback: no ambient noise
 
 logging:
   log_raw_tx: true

@@ -1,8 +1,8 @@
-// TxStartEstimator pins the math of "how early could the modem have
-// started its current TX burst, given every TX-stream packet I've
-// received so far". The estimator returns the *tightest* lower bound
-// (latest such time) since each additional packet only ever proves the
-// modem started no later than `arrival_now - cumulative_samples / Fs`.
+// TxStartEstimator answers "how early could the modem have started its
+// current TX burst, given every TX-stream packet seen so far?". The
+// estimator returns the tightest lower bound (latest such time): each
+// extra packet proves the modem started no later than
+// `arrival_now - cumulative_samples / Fs`.
 #include <gtest/gtest.h>
 #include "core/tx_start_estimator.hpp"
 
@@ -19,16 +19,16 @@ constexpr auto us(int64_t n) {
 }
 } // namespace
 
-// Test 4: After construction, no observation exists. The estimator must
-// not return a phantom bound that could mis-align the first message.
+// After construction no observation exists; the estimator returns no
+// phantom bound that could mis-align the first message.
 TEST(TxStartEstimator, InitialStateNoObservation) {
     TxStartEstimator est(FS);
     EXPECT_FALSE(est.has_observation());
     EXPECT_FALSE(est.earliest_start_time().has_value());
 }
 
-// Test 5: One packet of N samples arriving at time T proves the modem
-// began transmitting no later than T - N/Fs.
+// One packet of N samples arriving at time T proves the modem began
+// transmitting no later than T - N/Fs.
 TEST(TxStartEstimator, FirstPacketSeedsEstimate) {
     TxStartEstimator est(FS);
     const time_point T = est_clock::now();
@@ -43,10 +43,9 @@ TEST(TxStartEstimator, FirstPacketSeedsEstimate) {
     EXPECT_LE(std::chrono::abs(bound - expected), us(1));
 }
 
-// Test 6: Subsequent packets at steady cadence MUST NOT loosen the
-// bound. They can only refine it later (tighter lower bound = larger
-// timestamp). Even if the math sometimes regresses due to USB jitter,
-// the stored bound is the maximum across observations.
+// Subsequent packets at steady cadence never loosen the bound; the
+// stored bound is the maximum across observations even when individual
+// computations regress (USB jitter).
 TEST(TxStartEstimator, MonotonicTightening) {
     TxStartEstimator est(FS);
     const time_point T0 = est_clock::now();
@@ -66,9 +65,8 @@ TEST(TxStartEstimator, MonotonicTightening) {
     }
 }
 
-// Test 7: An out-of-order or jittered packet whose computed lower bound
-// is *earlier* than a prior observation MUST NOT replace the tighter
-// bound. We keep the max across observations.
+// An out-of-order or jittered packet whose computed lower bound is
+// earlier than a prior observation must not replace the tighter bound.
 TEST(TxStartEstimator, MaxOverObservationsIsTightest) {
     TxStartEstimator est(FS);
     const time_point T0 = est_clock::now();
@@ -88,8 +86,8 @@ TEST(TxStartEstimator, MaxOverObservationsIsTightest) {
     EXPECT_EQ(after, tight);
 }
 
-// Test 8: on_tx_entry() resets all state. Stale data from a prior TX
-// burst MUST NOT leak into the next message's alignment.
+// on_tx_entry() resets all state; stale data from a prior TX burst
+// must not leak into the next message's alignment.
 TEST(TxStartEstimator, ResetOnTxEntryClearsAll) {
     TxStartEstimator est(FS);
     const time_point T0 = est_clock::now();
@@ -102,8 +100,7 @@ TEST(TxStartEstimator, ResetOnTxEntryClearsAll) {
     EXPECT_FALSE(est.has_observation());
     EXPECT_FALSE(est.earliest_start_time().has_value());
 
-    // After reset, the next observation seeds fresh — not aliased to
-    // prior cumulative_samples.
+    // Next observation seeds fresh — not aliased to prior cumulative_samples.
     const time_point T_new = T0 + std::chrono::milliseconds(100);
     est.on_tx_packet(255, T_new);
     const auto bound = *est.earliest_start_time();

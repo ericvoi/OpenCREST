@@ -15,12 +15,8 @@ void FarrowResampler::set_ratio(double ratio) {
     step_  = ratio;
 }
 
-// Catmull-Rom / Hermite cubic interpolation.
-//
-// Given four samples x[n-1], x[n], x[n+1], x[n+2] in history_[0..3],
-// computes the value at fractional offset mu in [0,1) between x[n] and x[n+1].
-//
-// Horner form for numerical stability:
+// Catmull-Rom / Hermite cubic interpolation in Horner form.
+// history_[0..3] = x[n-1], x[n], x[n+1], x[n+2]; mu_ ∈ [0,1).
 //   y = x[n] + 0.5·t·{ (x[n+1]−x[n-1])
 //                     + t·[ 2·x[n-1] − 5·x[n] + 4·x[n+1] − x[n+2]
 //                          + t·(3·(x[n]−x[n+1]) + x[n+2] − x[n-1]) ] }
@@ -63,8 +59,7 @@ FarrowResampler::process(const float* input, size_t input_available,
 }
 
 size_t FarrowResampler::input_needed(size_t output_count) const {
-    // Conservative: we may need (output_count / ratio) rounded up, plus
-    // 4 samples of history headroom.
+    // Conservative: (output_count × ratio) rounded up, plus 4 history samples.
     return static_cast<size_t>(std::ceil(static_cast<double>(output_count) * ratio_))
            + 4;
 }

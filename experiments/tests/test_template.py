@@ -1,9 +1,8 @@
 """Golden test for the base scenario template.
 
-The template's render must be byte-identical for a fixed parameter dict.
-This is the spec's only documented invariant for ``scenario_template.py``
-and the foundation for the rest of the harness (the cell_id hash, the
-determinism check, and the experiment templates all rely on it).
+The template's render must be byte-identical for a fixed parameter dict;
+the cell_id hash, the determinism check, and the experiment templates
+all rely on this.
 """
 from __future__ import annotations
 
@@ -63,7 +62,7 @@ def test_cell_id_is_stable_and_distinct() -> None:
     b = dict(GOLDEN_PARAMS); b["seed"] = 2
     assert st.cell_id(a) != st.cell_id(b)
     assert st.cell_id(a) == st.cell_id(dict(a))
-    # Permuting dict order must not change the id (sorted-keys canonical form).
+    # Permuting dict order must not change the id.
     permuted = {k: a[k] for k in reversed(list(a.keys()))}
     assert st.cell_id(a) == st.cell_id(permuted)
 

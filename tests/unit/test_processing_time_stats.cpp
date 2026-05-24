@@ -51,10 +51,9 @@ TEST(ProcessingTimeStats, MeanMatchesUniformDistribution) {
 }
 
 TEST(ProcessingTimeStats, PercentilesRoughlyMatchUniformDistribution) {
-    // Use a span wide enough to traverse many log buckets so percentile
-    // resolution is meaningful. The plan permits "within 1 bucket" of
-    // accuracy, which on a log scale at ~1 ms is ~5 % — we assert ±15 %
-    // to leave a comfortable safety margin without flaking.
+    // Span wide enough to traverse many log buckets so percentile
+    // resolution is meaningful. Asserts within ±15 % to avoid flakiness
+    // (log-bucket resolution near 1 ms is ~5 %).
     ProcessingTimeStats stats;
     std::vector<uint64_t> samples;
     samples.reserve(10'000);

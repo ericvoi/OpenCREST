@@ -14,10 +14,8 @@ using namespace openCREST::dsp;
 namespace {
 
 // realistic_cal mirrors the OpenAquatix HIL hardware. loopback_gain is
-// chosen so preamp_gain_db = 0 (a unity preamp), which keeps the legacy
-// AFE/preamp identity for tests that don't exercise preamp gain
-// explicitly. Tests that want a non-trivial preamp set loopback_gain
-// directly on the returned struct.
+// chosen so preamp_gain_db = 0 (unity preamp); tests that want a
+// non-trivial preamp set loopback_gain on the returned struct.
 //
 // For reference: loopback_gain (linear) = atten[loopback_cal_atten] ×
 // preamp_gain_linear. With cal_atten = 0 and atten[0] = -93.16 dB
@@ -102,11 +100,9 @@ TEST(AfePsd, ZeroNoiseFloorReturnsNegativeInfinity) {
 // WenzPsdAtCenterFreqMonotonicInSeaState
 // ---------------------------------------------------------------------------
 
-// Pinned numeric value: 10·log10(P_µPa²/Hz) = 20·log10(P_µPa/√Hz), i.e. the
-// dB value of amplitude PSD equals the dB value of power PSD. Catches the
-// "factor-of-two" regression where amplitude was being computed as 0.5 ×
-// power dB. With RVR = 0 the preamp-input dBV value equals the raw Wenz
-// dB power value numerically.
+// 10·log10(P_µPa²/Hz) = 20·log10(P_µPa/√Hz): the dB value of amplitude
+// PSD equals the dB value of power PSD. With RVR = 0 the preamp-input
+// dBV value equals the raw Wenz dB power value numerically.
 TEST(NaturalPsd, AmplitudePsdEqualsPowerPsdDb) {
     const TransducerSpec t{0.0f, 0.0f};
     const float natural = natural_noise_psd_dbv_at_preamp_per_sqrt_hz(
@@ -115,8 +111,7 @@ TEST(NaturalPsd, AmplitudePsdEqualsPowerPsdDb) {
     EXPECT_NEAR(natural, expected, 1e-3f);
 }
 
-// At fc=31.5 kHz, ss=3: Wenz wind dominates → ≈47 dB re µPa²/Hz. Pin so
-// future model edits don't silently shift the operating point.
+// At fc=31.5 kHz, ss=3: Wenz wind dominates → ≈47 dB re µPa²/Hz.
 TEST(NaturalPsd, AbsoluteValueAtThirtyOnePointFiveKHzSeaState3) {
     const float p = noise_psd_db(31'500.0f, 3, true);
     EXPECT_GT(p, 40.0f);
@@ -147,10 +142,9 @@ TEST(NaturalPsd, HeterogeneousReceiverFrequencies) {
 }
 
 // At the preamp input, the natural value is invariant to the RX-side
-// attenuation pad and the DAC voltage reference — because we no longer
-// reference into the DAC sample domain at all. Pin this so a future
-// regression that re-introduces atten/Vref into the natural calc can't
-// silently re-break the boost comparison.
+// attenuation pad and the DAC voltage reference — the calculation no
+// longer references into the DAC sample domain at all. Equals Wenz_dB +
+// RVR exactly.
 TEST(NaturalPsd, PreampReferencedNaturalIgnoresAttenAndVref) {
     const TransducerSpec t{0.0f, -180.0f};
     const float a = natural_noise_psd_dbv_at_preamp_per_sqrt_hz(31'500.0f, t, 3, true);
@@ -256,9 +250,7 @@ TEST(ReceiverNoiseSizing, NaturalAboveAfePlusMarginYieldsZeroBoost) {
     EXPECT_GT(s.natural_psd_dbv_at_preamp,
               s.afe_psd_dbv_at_preamp + 10.0f);
     EXPECT_FLOAT_EQ(s.boost_db, 0.0f);
-    // target at DAC = un-do(input pad + V_ref_dac) on (natural + boost) at
-    // preamp. Equivalent to the legacy rx_chain_db_uPa_to_dBFS expression
-    // when boost = 0 and preamp_gain = 0 dB.
+    // target at DAC = un-do(input pad + V_ref_dac) on (natural + boost) at preamp.
     const float vref_dac_db = 20.0f * std::log10(cal.dac_vref_peak_volts);
     const float expected_target_dbfs = s.natural_psd_dbv_at_preamp
                                      - cal.input_attenuation[1]
@@ -297,15 +289,11 @@ TEST(ReceiverNoiseSizing, UncalibratedAfeFallsBackToConstant) {
     EXPECT_FLOAT_EQ(s.afe_psd_dbv_at_preamp, kFallbackAfePsdDbvAtPreamp);
 }
 
-// Pin the load-bearing invariant of this whole refactor: the AFE noise
-// floor expressed at the preamp input must NOT change when the operating
-// attenuation pad changes. The pad is downstream of the preamp from the
-// noise's point of view (noise originates at the preamp/ADC and is
-// observed at the ADC); shifting the pad changes the chain gain a sim
-// noise injection sees, but the AFE-as-input-referred is invariant.
-//
-// Equivalent restatement: the AFE→preamp conversion uses preamp_gain (from
-// loopback_gain & loopback_cal_attenuation), NOT input_atten[op].
+// AFE noise floor at the preamp input must not change with the operating
+// attenuation pad: noise originates at the preamp/ADC, so the AFE-at-preamp
+// is input-referred and invariant.
+// (AFE→preamp uses preamp_gain from loopback_gain & loopback_cal_attenuation,
+// NOT input_atten[op].)
 TEST(ReceiverNoiseSizing, AfeAtPreampInvariantToOperatingAtten) {
     auto cal = realistic_cal();
     const TransducerSpec t{152.0f, -180.0f};
@@ -323,11 +311,8 @@ TEST(ReceiverNoiseSizing, AfeAtPreampInvariantToOperatingAtten) {
                 cal.input_attenuation[1] - cal.input_attenuation[0], 1e-3f);
 }
 
-// The +10 dB chain-gain regression: when preamp_gain ≠ 0 dB (i.e. the
-// chain DAC→ADC isn't unity), the OLD code mis-compared natural-at-DAC
-// with AFE-at-ADC and the actual injected noise overshot AFE+margin by
-// the chain gain. Pin that the NEW computation hits AFE+margin at the
-// preamp regardless of preamp_gain.
+// With non-unity preamp_gain (DAC→ADC chain not unity), the boost must
+// land at AFE+margin in the preamp frame regardless of preamp_gain.
 TEST(ReceiverNoiseSizing, PreampGainDoesNotInflateBoost) {
     auto cal = realistic_cal();
     cal.noise_floor_psd_counts_per_sqrt_hz = 1.0f;

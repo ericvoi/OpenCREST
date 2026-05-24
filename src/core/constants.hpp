@@ -14,14 +14,13 @@ constexpr float  MAX_MULTIPATH_DELAY_S   = 0.200f; // 200 ms
 constexpr float  TR_SETTLING_TIME_S      = 0.200f; // 200 ms
 constexpr size_t PROCESSING_BLOCK_SIZE   = 256;    // samples per processing tick
 
-// Modem audio buffer (always 16384 per firmware spec §4)
+// Modem audio buffer (fixed by firmware).
 constexpr uint16_t MODEM_AUDIO_BUFFER_CAPACITY = 16'384;
 
-// Ring buffer sizing (in samples)
-// TX ring: buffers modem→host capture before channel engine consumes it (~1 s)
+// Ring buffer sizing (in samples).
+// TX ring: modem→host capture, ~1 s at 500 kSPS.
 constexpr size_t TX_RING_CAPACITY        = 512 * 1024;
-// RX ring: in Phase 2, the propagation history lives in PairBuffers; rx_ring
-// only needs to cover the BufferPacer's send slack (~tens of ms is plenty).
+// RX ring: host→modem, only needs to cover the pacer's send slack.
 // 64 K samples ≈ 130 ms at 500 kSPS (~128 KB).
 constexpr size_t RX_RING_CAPACITY        = 64 * 1024;
 

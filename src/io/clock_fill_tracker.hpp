@@ -15,16 +15,13 @@ namespace openCREST {
 //           + (cumulative_samples_sent_now − samples_sent_at_anchor)
 //           − round((T − T_anchor) × Fs_modem)
 //
-// Fs_modem is seeded from the modem's calibration data and refined
-// between successive anchors via EWMA from the observed
-// (consumed_samples / Δt) ratio. The first inference after every
-// reset() is skipped because the pipeline depth makes the result
-// unreliable (parallels ModemIO::skip_next_drift_check_).
+// Fs_modem is seeded from calibration and refined between anchors via
+// EWMA of the observed (consumed_samples / Δt) ratio. The first
+// inference after reset() is skipped because pipeline depth makes the
+// initial measurement unreliable.
 //
 // Send-decision logic: bang-bang with asymmetric hysteresis around the
-// target fill, capped at burst_cap_multiplier × nominal_rate so a
-// temporarily low fill can't trigger an unbounded burst that overruns
-// the modem RX buffer.
+// target fill, capped at burst_cap_multiplier × nominal_rate.
 //
 // Thread-safety: instance owned by a single ModemIO; no internal
 // locking.
@@ -99,23 +96,20 @@ private:
     bool       last_anchor_was_fallback_   = false;
     bool       skip_next_rate_inference_   = true;
 
-    // Send-timestamp ring (linear scan; small enough that hashing isn't
-    // worth the complexity).
+    // Send-timestamp ring (linear scan; small enough that hashing
+    // wouldn't pay).
     std::array<Entry, RING_CAPACITY> ring_{};
     size_t next_ring_slot_ = 0;
 
-    // Cumulative samples sent across the lifetime of the current RX
-    // session. Cleared on reset().
+    // Cumulative samples sent during the current RX session.
     uint64_t cumulative_samples_sent_ = 0;
 
-    // Most recent modem-reported rx_expected_id. The delta against the
-    // current status is used by the rate-EWMA — counting MODEM-accepted
-    // packets, not host-sent ones, so dropped-packet bursts don't
-    // poison the smoothed rate.
+    // Most recent modem-reported rx_expected_id. Deltas drive the rate
+    // EWMA — counting modem-accepted packets, not host-sent ones, so
+    // dropped packets don't poison the smoothed rate.
     uint16_t prev_rx_expected_id_ = 0;
     bool     prev_rx_expected_id_valid_ = false;
 
-    // Diagnostics counter.
     uint64_t fallback_anchor_count_ = 0;
 
     // Send schedule.
@@ -123,12 +117,9 @@ private:
     bool       schedule_initialized_ = false;
     bool       holding_              = false;  // hysteresis state
 
-    // Wall-clock time of the most recent send (updated on both normal
-    // and keepalive-trickle returns from should_send). Used to rate-limit
-    // the trickle during hold so the modem keeps emitting status —
-    // firmware (hil_buffer.c:357) only sends status on accepted incoming
-    // packets, so going fully silent during hold wedges the host with a
-    // stale anchor.
+    // Wall-clock of the most recent send. Used to rate-limit the
+    // keepalive trickle during hold so the modem keeps emitting status
+    // (firmware only emits status on accepted incoming packets).
     time_point last_send_time_{};
 };
 

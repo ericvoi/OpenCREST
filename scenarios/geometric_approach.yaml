@@ -1,18 +1,16 @@
 name: geometric_approach
 description: >
-  Two-modem closing approach with method-of-images multipath. Modem A closes
-  on modem B at 2 m/s from an initial range of 1000 m. Used as the reference
-  scene for the paper's §4.2 (channel-model validation) and §4.4 (JANUS PER
-  vs range) experiments. Taps are recomputed each processing block from the
-  instantaneous range R(t); Doppler emerges naturally from the time-varying
-  direct-path delay rather than from a bulk Farrow ratio.
+  Two-modem closing approach with method-of-images multipath. Modem A
+  closes on modem B at 2 m/s from an initial range of 1000 m. Taps are
+  recomputed each processing block from the instantaneous range R(t);
+  Doppler emerges from the time-varying direct-path delay.
 
 environment:
   sound_speed_m_s: 1500.0
   saltwater: true
   spreading_model: spherical
-  # PairBuffer holds an entire message in flight — increase if you push
-  # longer JANUS payloads through this scene.
+  # PairBuffer holds an entire message in flight; increase for longer
+  # payloads.
   max_message_duration_s: 10.0
 
 transducers:
@@ -52,7 +50,7 @@ channels:
       enable_bottom: true
       enable_surface_bottom: false
       enable_bottom_surface: false
-      r_min_m: 500.0                # PairBuffer is sized for R ∈ [r_min, r_max]
+      r_min_m: 500.0                # PairBuffer is sized for R in [r_min, r_max]
       r_max_m: 1100.0
 
 noise:

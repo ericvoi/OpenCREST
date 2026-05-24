@@ -18,13 +18,8 @@
 
 namespace openCREST {
 
-// Per-modem context passed into ChannelEngine.
-//
-// Provides everything the engine needs to wire one modem into the
-// PairBuffer / SourceWorker / ReceiverMix graph: identification, the
-// shared atomic runtime state, the pair of ring buffers, and the
-// ambient-noise configuration (turned into a NoiseGenerator inside the
-// ReceiverMix at construction).
+// Per-modem context passed into ChannelEngine. Carries everything needed
+// to wire one modem into the PairBuffer / SourceWorker / ReceiverMix graph.
 struct PerModemContext {
     std::string                id;
     CalibrationData            calibration;
@@ -35,34 +30,28 @@ struct PerModemContext {
     uint32_t                   sample_rate = 500'000;
 
     // Per-receiver dB boost applied to every Channel feeding this modem.
-    // Computed at scenario load when the natural Wenz PSD at the modem's
-    // center frequency would otherwise sit below the modem's AFE noise
-    // floor + min_margin. Preserves SNR; eats clipping headroom.
+    // Set when the natural Wenz PSD at the receiver's fc sits below the
+    // AFE noise floor + min_margin; preserves SNR at the cost of clipping
+    // headroom.
     float                      receive_boost_db = 0.0f;
 };
 
-// Phase 2 ChannelEngine: a thin orchestrator that owns the per-pair
-// buffers, the per-source workers, and the per-receiver mixers.
+// Thin orchestrator owning per-pair PairBuffers, per-source workers, and
+// per-receiver mixers.
 //
-// Lifetime
-// --------
-// 1. Construction: parses scenario.channels, builds Channel + PairBuffer
-//    for every (source, receiver) pair, builds one SourceWorker per source
-//    modem (collecting all of its outgoing channels), and builds one
-//    ReceiverMix per receiver (collecting all incoming PairBuffers).
-// 2. start() — spawns one std::thread per SourceWorker.
-// 3. (simulation runs; ModemIO threads call receiver_mix(idx)->pull(...))
-// 4. stop() / destructor — joins all worker threads.
+// Lifecycle:
+//   1. Construction builds Channel + PairBuffer for every (source,
+//      receiver) pair, one SourceWorker per source, one ReceiverMix per
+//      receiver.
+//   2. start() spawns one thread per SourceWorker.
+//   3. ModemIO threads pull receiver-side via receiver_mix(idx).
+//   4. stop() / destructor joins all worker threads.
 //
-// Sizing
-// ------
-// Every PairBuffer is sized for the worst case derived from
-//   environment.max_range_m       (falls back to largest channel range)
-// plus MAX_MULTIPATH_DELAY_S worth of taps
-// plus environment.max_message_duration_s × sample_rate of in-flight slack.
-// The in-flight term is required because the receiver only drains while its
-// modem is in RX state — in half-duplex loopback the entire message has to
-// fit in the buffer before any of it can be consumed.
+// PairBuffer sizing covers the worst-case write extent (per-channel base
+// delay + multipath tail, or geometric longest path at r_max), with an
+// in-flight slack of environment.max_message_duration_s * sample_rate.
+// The in-flight slack matters because half-duplex receivers cannot drain
+// while their modem is in TX — the entire message must fit.
 class ChannelEngine {
 public:
     ChannelEngine(const ScenarioConfig&        scenario,
@@ -75,79 +64,64 @@ public:
     // Spawn one thread per SourceWorker. Idempotent.
     void start();
 
-    // Stop and join all worker threads. Idempotent. Safe to call from any
-    // thread. Called automatically by the destructor.
+    // Stop and join all worker threads. Idempotent; thread-safe; called
+    // by the destructor.
     void stop();
 
-    // Get the receiver mix for the modem at `modem_idx`. Used by ModemIO's
-    // send_rx_data to pull samples on the receiver clock. Returns nullptr
-    // if the index is out of range.
+    // ReceiverMix for the given modem; nullptr if out of range. Called
+    // from ModemIO::send_rx_data on the receiver clock.
     ReceiverMix* receiver_mix(size_t modem_idx);
 
-    // Wire ModemIO-owned per-modem trackers into the engine's
-    // SourceWorker graph. Called by Simulator AFTER each modem's
-    // ModemIO has been constructed. In clock-tracker mode the
-    // SourceWorker uses these to compute precise message-arrival
-    // alignment; in PID mode they're recorded but ignored.
-    //
-    // `fill_tracker` and `rx_ring` belong to modem `modem_idx` and
-    // are queried by source workers whose channels feed *into* this
-    // modem. `tx_start_estimator` belongs to modem `modem_idx` and is
-    // queried by the source worker driving this modem's own outgoing
-    // channels.
+    // Wire ModemIO-owned per-modem trackers into the SourceWorker graph.
+    // `fill_tracker` and `rx_ring` belong to `modem_idx` and are queried
+    // by source workers whose channels feed into this modem;
+    // `tx_start_estimator` belongs to `modem_idx` and is queried by the
+    // source worker driving this modem's own outgoing channels.
+    // Used by the clock-tracker arrival-alignment path; recorded but
+    // ignored in PID mode.
     void wire_modem_trackers(size_t modem_idx,
                              IFillTracker* fill_tracker,
                              TxStartEstimator* tx_start_estimator,
                              SPSCRingBuffer<uint16_t>* rx_ring);
 
-    // Forwarding setter: hands the process-wide Metrics struct to
-    // every SourceWorker for incrementing arrival-alignment counters
-    // (late_messages). Idempotent; safe to call after construction
-    // and before start().
+    // Install the process-wide Metrics into every SourceWorker. Safe to
+    // call between construction and start().
     void set_metrics(Metrics* metrics);
 
-    // Session D — install the shared processing-time histogram into
-    // every SourceWorker. `deadline_us` is used to flag a per-batch
-    // tick as a real-time underrun (0 disables that path). Idempotent;
-    // safe to call before start().
+    // Install the shared processing-time histogram. `deadline_us` flags
+    // a per-batch tick as a real-time underrun (0 disables).
     void set_processing_time_stats(ProcessingTimeStats* stats,
                                     uint64_t deadline_us);
 
-    // Session D — install the per-source-modem message event log.
-    // `logs.size()` must equal num_modems(); any null entry leaves
-    // that source uninstrumented.
+    // Install per-source-modem event logs. `logs.size()` must equal
+    // num_modems(); null entries leave that source uninstrumented.
     void set_message_event_logs(const std::vector<MessageEventLog*>& logs);
 
-    // Look up a SourceWorker by source-modem index; returns nullptr if
-    // the index has no outgoing channels (and therefore no worker).
-    // Used by the simulator and integration tests to drive workers
-    // directly (e.g., for tests that bypass start()/stop()).
+    // SourceWorker for a given source modem; nullptr if that modem has no
+    // outgoing channels (no worker is created). Used by tests that drive
+    // workers directly.
     SourceWorker* source_worker(size_t modem_idx);
 
     size_t num_modems()        const { return modems_.size(); }
     size_t num_pair_buffers()  const { return pair_buffers_.size(); }
     size_t num_source_workers() const { return source_workers_.size(); }
 
-    // Capacity (slots, post power-of-2 rounding) of the engine's PairBuffers.
-    // All pair buffers share the same capacity. Returns 0 if no pair buffers.
+    // PairBuffer capacity in slots (post power-of-2 rounding). All pair
+    // buffers share the same capacity; 0 if none exist.
     size_t pair_buffer_capacity_samples() const {
         return pair_buffers_.empty() ? 0 : pair_buffers_.front()->capacity();
     }
 
-    // Compute worst-case PairBuffer capacity from scenario (pre power-of-2
-    // rounding). Public so tests and tools can inspect the budget without
-    // constructing the engine.
+    // Worst-case PairBuffer capacity from scenario (pre power-of-2
+    // rounding). Public for tests and budget inspection.
     static size_t worst_case_pair_capacity(const ScenarioConfig& scenario,
                                             uint32_t sample_rate);
 
 private:
-    // Resolve modem id → index.
     size_t modem_index(const std::string& id) const;
 
-    // For wire_modem_trackers: per receiver_modem_idx, the list of
-    // (source_modem_idx, outgoing_idx_in_source_worker) entries that
-    // feed into that receiver. Built at construction; consumed only
-    // when wiring is requested.
+    // Per-receiver list of (source_idx, outgoing_idx) entries feeding
+    // into that receiver. Used by wire_modem_trackers.
     struct OutgoingRef { size_t source_idx; size_t outgoing_idx; };
 
     std::vector<PerModemContext>                   modems_;

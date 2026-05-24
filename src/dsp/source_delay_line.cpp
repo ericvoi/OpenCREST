@@ -40,15 +40,14 @@ void SourceDelayLine::write(const float* in, size_t n) {
 }
 
 float SourceDelayLine::read_at(double pos) const {
-    // Catmull-Rom / Hermite cubic interpolation, same Horner form as
-    // FarrowResampler::interpolate. Reads x[n-1], x[n], x[n+1], x[n+2]
-    // from the ring where n = floor(pos).
+    // Catmull-Rom / Hermite cubic interpolation (same Horner form as
+    // FarrowResampler::interpolate). Reads x[n-1], x[n], x[n+1], x[n+2]
+    // where n = floor(pos).
     const double n_floor = std::floor(pos);
     const float  mu      = static_cast<float>(pos - n_floor);
     const int64_t n      = static_cast<int64_t>(n_floor);
 
-    // Cast to uint64_t for the mask; for n ≥ 1 (the safe range)
-    // the values are positive and the masking is straightforward.
+    // For n ≥ 1 (the safe range) the values are positive; mask via uint64.
     const uint64_t i0 = static_cast<uint64_t>(n - 1) & mask_;
     const uint64_t i1 = static_cast<uint64_t>(n)     & mask_;
     const uint64_t i2 = static_cast<uint64_t>(n + 1) & mask_;

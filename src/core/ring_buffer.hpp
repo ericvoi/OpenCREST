@@ -9,17 +9,16 @@ namespace openCREST {
 // Single-producer, single-consumer lock-free ring buffer.
 //
 // Thread-safety contract:
-//   * write() / available_write() — called ONLY from the producer thread.
-//   * read()  / available_read()  — called ONLY from the consumer thread.
-//   * capacity() / reset()        — call only when no concurrent access.
+//   * write() / available_write() — producer thread only.
+//   * read()  / available_read()  — consumer thread only.
+//   * capacity() / reset()        — no concurrent access.
 //
-// Capacity is rounded up to the next power of two so that index masking
-// replaces modulo division on the hot path.
+// Capacity is rounded up to the next power of two so index masking
+// replaces modulo on the hot path.
 template<typename T>
 class SPSCRingBuffer {
 public:
     explicit SPSCRingBuffer(size_t capacity) {
-        // Round up to power of two
         size_t cap = 1;
         while (cap < capacity) cap <<= 1;
         capacity_ = cap;
@@ -27,12 +26,11 @@ public:
         buffer_   = std::make_unique<T[]>(cap);
     }
 
-    // Not copyable; ring buffers are owned resources tied to specific threads.
     SPSCRingBuffer(const SPSCRingBuffer&)            = delete;
     SPSCRingBuffer& operator=(const SPSCRingBuffer&) = delete;
 
-    // Movable (before any threads touch it).
-    // std::atomic is not movable, so we manually transfer the values.
+    // Movable before any threads touch it. std::atomic is not movable, so
+    // values are transferred manually.
     SPSCRingBuffer(SPSCRingBuffer&& other) noexcept
         : write_pos_(other.write_pos_.load(std::memory_order_relaxed))
         , read_pos_(other.read_pos_.load(std::memory_order_relaxed))
@@ -60,7 +58,7 @@ public:
     }
 
     // ---------------------------------------------------------------------------
-    // Producer interface — call only from the single producer thread
+    // Producer interface — producer thread only
     // ---------------------------------------------------------------------------
 
     // Slots available for writing without blocking.
@@ -71,7 +69,7 @@ public:
     }
 
     // Write up to `count` items from `data`. Returns the number written.
-    // Returns less than `count` only when the buffer is full (never blocks).
+    // Returns less than `count` only when the buffer is full; never blocks.
     size_t write(const T* data, size_t count) {
         const size_t wp        = write_pos_.load(std::memory_order_relaxed);
         const size_t rp        = read_pos_.load(std::memory_order_acquire);
@@ -87,7 +85,7 @@ public:
     }
 
     // ---------------------------------------------------------------------------
-    // Consumer interface — call only from the single consumer thread
+    // Consumer interface — consumer thread only
     // ---------------------------------------------------------------------------
 
     // Items available for reading.
@@ -97,8 +95,8 @@ public:
         return wp - rp;
     }
 
-    // Read up to `count` items into `data`. Returns the number read.
-    // Returns less than `count` only when the buffer has fewer items available.
+    // Read up to `count` items into `data`. Returns the number read; less
+    // than `count` only when the buffer holds fewer items.
     size_t read(T* data, size_t count) {
         const size_t rp        = read_pos_.load(std::memory_order_relaxed);
         const size_t wp        = write_pos_.load(std::memory_order_acquire);
@@ -114,8 +112,7 @@ public:
     }
 
     // ---------------------------------------------------------------------------
-    // Accessors — safe to call from either thread when there is no concurrent
-    // write/read in progress
+    // Accessors — safe from either thread when there is no concurrent access
     // ---------------------------------------------------------------------------
 
     size_t capacity() const { return capacity_; }
@@ -127,9 +124,8 @@ public:
     }
 
 private:
-    // Producer-owned cache line
+    // Cache-line aligned to avoid producer/consumer false sharing.
     alignas(64) std::atomic<size_t> write_pos_{0};
-    // Consumer-owned cache line
     alignas(64) std::atomic<size_t> read_pos_{0};
 
     size_t              capacity_ = 0;

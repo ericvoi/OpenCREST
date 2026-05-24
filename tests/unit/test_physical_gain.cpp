@@ -13,8 +13,8 @@ using openCREST::dsp::compute_channel_physical_gain_db;
 
 namespace {
 
-// Construct a CalibrationData with the new Phase A voltage / fc fields
-// explicitly set (so tests pin the contract regardless of struct defaults).
+// Construct a CalibrationData with voltage / fc fields explicitly set
+// so tests pin the contract regardless of struct defaults.
 CalibrationData cal(float vref_adc_peak, float vref_dac_peak,
                     float fc_hz,
                     float output_atten_db = 0.0f,
@@ -49,10 +49,8 @@ ChannelConfig minimal_cfg(float range_m,
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// KnownChainEndToEnd: pinned numeric example from the plan, computed against
-// the exact dB-sum the formula promises. Tight tolerance (1 mdB).
-// ---------------------------------------------------------------------------
+// Pinned numeric example computed against the exact dB-sum the formula
+// promises. Tight tolerance (1 mdB).
 TEST(PhysicalGain, KnownChainEndToEnd) {
     constexpr float fc_hz    = 25'000.0f;
     constexpr float vref     = 1.65f;
@@ -86,13 +84,9 @@ TEST(PhysicalGain, KnownChainEndToEnd) {
     EXPECT_LT(got,  5.0);
 }
 
-// ---------------------------------------------------------------------------
-// DoublingRangeAdds6dBSpherical: with all other knobs fixed, doubling the
-// range under spherical spreading must drop the chain by exactly the
+// Doubling the range under spherical spreading drops the chain by the
 // spherical-spreading delta (≈ 6.02 dB) plus a small Thorp absorption
-// increment from the extra range. The relationship is path-loss only —
-// every other dB contribution cancels out.
-// ---------------------------------------------------------------------------
+// increment. Every other dB contribution cancels.
 TEST(PhysicalGain, DoublingRangeAdds6dBSpherical) {
     constexpr float fc_hz = 25'000.0f;
     const auto c = cal(1.0f, 1.0f, fc_hz);
@@ -115,11 +109,8 @@ TEST(PhysicalGain, DoublingRangeAdds6dBSpherical) {
     EXPECT_LT(g_short - g_long, 7.0);
 }
 
-// ---------------------------------------------------------------------------
-// TvrRvrSignSymmetry: shifting tvr by +x and rvr by -x must leave the chain
-// unchanged (TVR and RVR enter the dB sum with equal weight, opposite
-// roles).
-// ---------------------------------------------------------------------------
+// Shifting tvr by +x and rvr by -x leaves the chain unchanged (TVR and
+// RVR enter the dB sum with equal weight, opposite roles).
 TEST(PhysicalGain, TvrRvrSignSymmetry) {
     const auto c = cal(2.5f, 2.5f, 30'000.0f, -40.0f, -5.0f, 0.0f);
     auto cfg = minimal_cfg(75.0f);
@@ -133,12 +124,9 @@ TEST(PhysicalGain, TvrRvrSignSymmetry) {
     EXPECT_NEAR(g_a, g_b, 1e-4);
 }
 
-// ---------------------------------------------------------------------------
-// LegacyDefaultsCollapseToPathLossOnly: with default CalibrationData{}
-// (Vref=1.0, atten=0, fc=25 kHz) and TransducerSpec{} (tvr=rvr=0), the chain
-// must reduce to exactly -TL_dB at the source's center frequency. This is
-// the load-bearing invariant for shipping Phase B before firmware updates.
-// ---------------------------------------------------------------------------
+// With default CalibrationData{} (Vref=1.0, atten=0, fc=25 kHz) and
+// TransducerSpec{} (tvr=rvr=0), the chain reduces to exactly -TL_dB at
+// the source's center frequency.
 TEST(PhysicalGain, LegacyDefaultsCollapseToPathLossOnly) {
     const CalibrationData default_cal{};
     const TransducerSpec  default_tx{};
@@ -154,12 +142,9 @@ TEST(PhysicalGain, LegacyDefaultsCollapseToPathLossOnly) {
     EXPECT_NEAR(got, -expected_tl, 1e-4);
 }
 
-// ---------------------------------------------------------------------------
-// HeterogeneousCenterFrequencies: path loss must be evaluated at the SOURCE
-// modem's center frequency, not the receiver's. Set src_cal.fc = 10 kHz and
-// rx_cal.fc = 50 kHz with all other knobs equal; the chain must match a
-// reference TL computed at 10 kHz.
-// ---------------------------------------------------------------------------
+// Path loss is evaluated at the SOURCE modem's center frequency, not
+// the receiver's. With src.fc = 10 kHz and rx.fc = 50 kHz, the chain
+// matches TL computed at 10 kHz.
 TEST(PhysicalGain, HeterogeneousCenterFrequencies) {
     const auto src_cal = cal(1.0f, 1.0f, 10'000.0f);
     const auto rx_cal  = cal(1.0f, 1.0f, 50'000.0f);
@@ -185,10 +170,7 @@ TEST(PhysicalGain, HeterogeneousCenterFrequencies) {
     EXPECT_GT(std::abs(expected_tl_at_rx - expected_tl_at_src), 1.0);
 }
 
-// ---------------------------------------------------------------------------
-// AttenIdxSelectsRxInputAttenuation: the chain must read
-// rx_cal.input_attenuation[atten_idx], not [0] always.
-// ---------------------------------------------------------------------------
+// The chain reads rx_cal.input_attenuation[atten_idx], not [0] always.
 TEST(PhysicalGain, AttenIdxSelectsRxInputAttenuation) {
     auto rx = cal(1.0f, 1.0f, 25'000.0f, /*out_at=*/0.0f,
                   /*in0=*/-10.0f, /*in1=*/-30.0f);
@@ -204,10 +186,8 @@ TEST(PhysicalGain, AttenIdxSelectsRxInputAttenuation) {
     EXPECT_NEAR(g_idx1 - g_idx0, 20.0, 1e-4);
 }
 
-// ---------------------------------------------------------------------------
-// VrefRatioContributesAdcMinusDac: shifting only adc_vref shifts the chain
-// by +20·log10(ratio). Shifting only dac_vref shifts it by -20·log10(ratio).
-// ---------------------------------------------------------------------------
+// Shifting only adc_vref shifts the chain by +20·log10(ratio);
+// shifting only dac_vref shifts it by -20·log10(ratio).
 TEST(PhysicalGain, VrefRatioContributesAdcMinusDac) {
     const auto src_a = cal(1.0f, 2.0f, 25'000.0f);
     const auto src_b = cal(2.0f, 2.0f, 25'000.0f);   // ADC vref ×2 → +6 dB

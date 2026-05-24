@@ -1,7 +1,5 @@
-// Tests pinning the PidFillTracker adapter's contract: it MUST be a
-// transparent wrapper over BufferPacer. Any divergence in behavior would
-// mean the IFillTracker abstraction silently changed PID-mode behavior,
-// which is exactly what Phase 0 of the clock-tracker rollout forbids.
+// PidFillTracker is a transparent wrapper over BufferPacer; these tests
+// verify behavioral parity.
 #include <gtest/gtest.h>
 #include "io/pid_fill_tracker.hpp"
 #include "io/buffer_pacer.hpp"
@@ -35,10 +33,8 @@ StatusPayload make_status(uint16_t fill) {
 
 } // namespace
 
-// Test 1: PidFillTracker::should_send delegates to BufferPacer::should_send.
-// Both should fire at the same wall-clock instants when given identical
-// state — first call always true (schedule-init), subsequent calls track
-// the configured period.
+// should_send delegates to BufferPacer::should_send — both fire at the
+// same wall-clock instants given identical state.
 TEST(PidFillTrackerAdapter, DelegatesShouldSendToBufferPacer) {
     PidFillTracker tracker(DAC_RATE, BUFFER_CAP, SAMPLES_PER_PKT);
     BufferPacer    pacer  (DAC_RATE, BUFFER_CAP, SAMPLES_PER_PKT);
@@ -57,9 +53,7 @@ TEST(PidFillTrackerAdapter, DelegatesShouldSendToBufferPacer) {
     EXPECT_EQ(tracker.should_send(t), pacer.should_send(t));
 }
 
-// Test 2: on_status(status, now) must forward buffer_fill (and nothing
-// else from the status payload) into BufferPacer::update_fill(fill, now).
-// We check by comparing estimated_fill after the call.
+// on_status(status, now) forwards buffer_fill into BufferPacer::update_fill.
 TEST(PidFillTrackerAdapter, OnStatusForwardsFillToBufferPacer) {
     PidFillTracker tracker(DAC_RATE, BUFFER_CAP, SAMPLES_PER_PKT);
     BufferPacer    pacer  (DAC_RATE, BUFFER_CAP, SAMPLES_PER_PKT);
@@ -82,8 +76,8 @@ TEST(PidFillTrackerAdapter, OnStatusForwardsFillToBufferPacer) {
     EXPECT_FLOAT_EQ(tracker.current_rate(), pacer.current_rate());
 }
 
-// Test 3: reset() clears BufferPacer state — integrator, schedule, and
-// last-fill anchor must all return to their pre-update values.
+// reset() clears BufferPacer state — integrator, schedule, and last-fill
+// anchor return to pre-update values.
 TEST(PidFillTrackerAdapter, ResetClearsBufferPacer) {
     PidFillTracker tracker(DAC_RATE, BUFFER_CAP, SAMPLES_PER_PKT);
 

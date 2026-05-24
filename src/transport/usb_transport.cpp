@@ -64,12 +64,10 @@ bool UsbTransport::open(const std::string& usb_serial) {
         return false;
     }
 
-    // Drain any stale bytes the device queued on the bulk-IN endpoints from
-    // a prior session. The previous simulator's exit-HIL-mode can leave one
-    // or more status packets sitting in the device's USB FIFO; when this
-    // simulator's first recv_control issues a 64-byte read, libusb returns
-    // LIBUSB_ERROR_OVERFLOW because the device sent more than that in the
-    // first transfer (multiple back-to-back status packets concatenated).
+    // Drain stale bytes left in the device's bulk-IN FIFOs from a prior
+    // simulator session; otherwise the first recv_control's 64-byte
+    // read can hit LIBUSB_ERROR_OVERFLOW from concatenated status
+    // packets.
     drain_in_endpoint(ctrl_ep_in_);
     drain_in_endpoint(data_ep_in_);
 
@@ -90,10 +88,6 @@ bool UsbTransport::is_open() const {
     return handle_ != nullptr;
 }
 
-// ---------------------------------------------------------------------------
-// Transfer methods
-// ---------------------------------------------------------------------------
-
 TransferResult UsbTransport::send_data(const uint8_t* data, size_t len, int timeout_ms) {
     return bulk_transfer(data_ep_out_, const_cast<uint8_t*>(data), len, timeout_ms);
 }
@@ -109,10 +103,6 @@ TransferResult UsbTransport::send_control(const uint8_t* data, size_t len, int t
 TransferResult UsbTransport::recv_control(uint8_t* data, size_t len, int timeout_ms) {
     return bulk_transfer(ctrl_ep_in_, data, len, timeout_ms);
 }
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
 
 TransferResult UsbTransport::bulk_transfer(uint8_t endpoint,
                                              uint8_t* data, size_t len,
@@ -130,9 +120,8 @@ TransferResult UsbTransport::bulk_transfer(uint8_t endpoint,
 
 void UsbTransport::drain_in_endpoint(uint8_t endpoint) {
     if (!handle_) return;
-    // 4 KiB swallows up to 8 back-to-back 512-byte HS bulk packets, or 64
-    // back-to-back 64-byte control packets — enough for any plausible
-    // backlog from a clean previous shutdown.
+    // 4 KiB swallows up to 8 back-to-back 512-byte HS bulk packets or
+    // 64 back-to-back 64-byte control packets.
     uint8_t buf[4096];
     constexpr int kMaxAttempts    = 16;
     constexpr int kShortTimeoutMs = 5;
@@ -141,7 +130,7 @@ void UsbTransport::drain_in_endpoint(uint8_t endpoint) {
         const int ret = libusb_bulk_transfer(handle_, endpoint, buf, sizeof(buf),
                                               &transferred, kShortTimeoutMs);
         if (ret == LIBUSB_ERROR_TIMEOUT) return;   // FIFO drained
-        if (ret != LIBUSB_SUCCESS) return;         // any error: stop trying
+        if (ret != LIBUSB_SUCCESS) return;
         if (transferred == 0) return;
     }
 }
@@ -162,12 +151,9 @@ TransferResult UsbTransport::map_libusb_error(int err, int transferred) const {
 }
 
 bool UsbTransport::discover_endpoints() {
-    // Walk the device configuration and locate the two bulk interfaces.
-    // We expect:
-    //   Interface DATA_INTERFACE_NUM: one IN bulk ep (data_ep_in_),
-    //                                 one OUT bulk ep (data_ep_out_)
-    //   Interface CTRL_INTERFACE_NUM: one IN bulk ep (ctrl_ep_in_),
-    //                                 one OUT bulk ep (ctrl_ep_out_)
+    // Walk the active configuration. Each of DATA_INTERFACE_NUM and
+    // CTRL_INTERFACE_NUM is expected to expose one IN + one OUT bulk
+    // endpoint.
     libusb_device* dev = libusb_get_device(handle_);
     libusb_config_descriptor* config = nullptr;
     if (libusb_get_active_config_descriptor(dev, &config) != LIBUSB_SUCCESS) {

@@ -12,12 +12,12 @@ void Metrics::reset() {
     rx_ring_underruns.store(0,   std::memory_order_relaxed);
     fw_rx_underruns.store(0,     std::memory_order_relaxed);
     fw_tx_overruns.store(0,      std::memory_order_relaxed);
-    // rx_drift is a level, not a counter — do not reset on interval rollover
+    // rx_drift is a level, not a counter — not reset on interval rollover.
     processing_tick_us.store(0,  std::memory_order_relaxed);
     late_messages.store(0,        std::memory_order_relaxed);
     fill_anchor_fallbacks.store(0, std::memory_order_relaxed);
     // estimated_fill_samples, estimated_modem_rate, fw_buffer_fill are
-    // levels — do not reset on interval rollover
+    // levels — not reset on interval rollover.
 }
 
 void Metrics::print_summary(double elapsed_s) const {

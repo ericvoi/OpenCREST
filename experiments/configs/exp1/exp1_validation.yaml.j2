@@ -1,4 +1,8 @@
-{#- Experiment 1 — fixed-range geometric channel validation (paper §4.2).
+{#- Experiment 1 — fixed-range geometric channel validation.
+
+Single A->B geometric channel; modem B's RX is the analysis stream.
+Stationary scene (v = 0, a = 0). noise.disable=true to isolate multipath
+structure. Only modem A's chirp matters for the IR estimate.
 
 Variables:
   seed                (int)   random_seed for this cell
@@ -13,26 +17,16 @@ Variables:
   spreading_exponent_k(float) default 1.5
   tvr_a_db, rvr_a_db  (float) modem A transducer params (defaults 172, -200)
   tvr_b_db, rvr_b_db  (float) modem B transducer params (defaults 170, -200)
-  channel_gain_db     (float) additive trim on the channel chain (default -50).
-                              Cancels the Phase-C auto-boost so the chirp stays
-                              in the linear DAC range; tune by inspecting the
-                              "Channel modem_a → modem_b: AFE_dB=..." stdout line.
+  channel_gain_db     (float) additive trim on the channel chain (default -50)
+                              to keep the chirp in the linear DAC range
   output_directory    (str)   per-cell output dir (injected by Sweep runner)
-
-A single A->B geometric channel; modem B's RX is the analysis stream.
-Stationary scene (v = 0, a = 0). noise.disable=true to isolate multipath
-structure (>= 50 dB SNR by construction). The reverse direction is omitted
-on purpose — only modem A's chirp matters for the IR estimate.
-
-Render is byte-stable for a given parameter dict so the determinism check
-and template tests can golden-match.
 -#}
 name: exp1_validation_R{{ "%d"|format(range_m|float|round|int) }}_seed{{ seed|int }}
 description: >
-  Experiment 1 channel-model validation cell at R={{ "%.1f"|format(range_m|float) }} m,
-  seed={{ seed|int }}. Stationary geometric scene with direct + surface +
-  bottom paths, noise disabled. A single Session-A LFM chirp is launched
-  from modem A; modem B's RX captures the channel-modified signal.
+  Channel-model validation cell at R={{ "%.1f"|format(range_m|float) }} m,
+  seed={{ seed|int }}. Stationary geometric scene (direct + surface +
+  bottom paths, noise disabled). A single firmware LFM chirp from modem A
+  is captured by modem B's RX.
 
 environment:
   sound_speed_m_s: 1500.0

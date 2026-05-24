@@ -8,7 +8,7 @@ namespace openCREST {
 
 namespace {
 
-// One candidate path indexed by its vertical offset Δz: ℓ = √(R² + Δz²).
+// One candidate path indexed by vertical offset dz: l = sqrt(R^2 + dz^2).
 struct Candidate {
     float dz;
     float gamma_product;
@@ -33,7 +33,7 @@ std::size_t GeometricScene::compute_paths(float range_m,
     const float zr = geom_.receiver_depth_m;
     const float D  = geom_.water_depth_m;
 
-    // Paper eq.(1) — image-method Δz for each path.
+    // Paper eq.(1): image-method dz per path.
     const std::array<Candidate, 5> candidates{{
         { zs - zr,                       1.0f,                                   false, false, geom_.enable_direct },
         { zs + zr,                       geom_.gamma_surface,                    true,  false, geom_.enable_surface },
@@ -52,8 +52,7 @@ std::size_t GeometricScene::compute_paths(float range_m,
         t.has_bottom_bounce  = c.has_bottom;
     }
 
-    // Sort by length ascending — direct (smallest |Δz|) naturally comes
-    // first whenever it's enabled.
+    // Sort by length; direct path (smallest |dz|) comes first when enabled.
     std::sort(out.begin(), out.begin() + n,
               [](const PathTap& a, const PathTap& b) {
                   return a.length_m < b.length_m;
@@ -69,21 +68,20 @@ GeometricScene::resolve(const PathTap& path,
                          float           sample_rate_hz) const {
     const float c_sound = clamp_sound_speed_geom(env_.sound_speed_m_s);
 
-    // Excess delay over direct path (clamped at 0; the direct path itself
-    // resolves to 0 samples by construction). Fractional — Session C reads
-    // this with per-tap Farrow interpolation; legacy callers round.
+    // Excess delay over direct path, clamped at 0 (direct path itself
+    // resolves to 0 samples). Fractional — per-tap Farrow interpolates;
+    // static-mode callers round.
     const double excess_s = std::max(0.0,
         (static_cast<double>(path.length_m) - static_cast<double>(direct_length_m))
             / static_cast<double>(c_sound));
     const double delta_samples_frac =
         excess_s * static_cast<double>(sample_rate_hz);
 
-    // Eq.(2), voltage form: a_i = (∏ Γ) / ℓ^(k/2) · 10^(-α(fc)·ℓ/20000).
-    // The k convention is the power-domain spreading exponent (cylindrical=1,
-    // spherical=2, hybrid=1.5) to match static-mode path_loss, which computes
-    // 10·k·log10(R) dB. Since a_i scales sample amplitude (voltage), the
-    // exponent on ℓ is k/2 — e.g. spherical (k=2) gives 1/R voltage spreading,
-    // matching the static path-loss reduction factor 10^(-20·log10(R)/20).
+    // Eq.(2), voltage form: a_i = (prod Gamma) / l^(k/2) * 10^(-alpha(fc)*l/20000).
+    // k is the power-domain spreading exponent (cylindrical=1, spherical=2,
+    // hybrid=1.5) to match static-mode path_loss which uses 10*k*log10(R) dB.
+    // Since a_i scales amplitude (voltage), the exponent on l is k/2 — e.g.
+    // spherical (k=2) gives 1/R voltage spreading.
     const float fc_khz = center_freq_hz / 1000.0f;
     const float alpha_db_per_km = dsp::thorp_absorption_db_per_km(
         fc_khz, saltwater);

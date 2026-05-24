@@ -1,7 +1,6 @@
-// Tests for SourceWorker::compute_arrival_aligned_gap — the pure
-// function behind the clock-tracker arrival-alignment path.
+// Tests for SourceWorker::compute_arrival_aligned_gap.
 //
-// Math under test (per the plan):
+// Math under test:
 //   T_play(prior_wm) ≈ now + (prior_wm − read_pos + rx_ring_depth + F_B) / Fs_B
 //   Want T_play(write_origin) == T_tx_start + propagation_delay_s
 //   write_origin = prior_wm + gap_samples
@@ -22,9 +21,7 @@ constexpr auto us(int64_t n) { return std::chrono::microseconds(n); }
 constexpr auto ms(int64_t n) { return std::chrono::milliseconds(n); }
 } // namespace
 
-// Test 19: With an empty pipeline (prior_wm = read_pos = 0; rx_ring = 0;
-// F_B = 0) and zero propagation delay, gap = (T_tx_start − now) × Fs.
-// At T_tx_start = now, gap = 0.
+// Empty pipeline and zero propagation: gap is zero when T_tx_start == now.
 TEST(ArrivalAlignment, GapZeroAtTxStartEqualsNowAndEmptyPipeline) {
     const time_point now = sw_clock::now();
     const size_t gap = SourceWorker::compute_arrival_aligned_gap(
@@ -39,13 +36,8 @@ TEST(ArrivalAlignment, GapZeroAtTxStartEqualsNowAndEmptyPipeline) {
     EXPECT_EQ(gap, 0u);
 }
 
-// Test 19 (main): With realistic depths, the gap places the message
-// such that the first sample is heard at T_tx_start + propagation_delay
-// within ±1 packet (255 samples).
-//
-// Scenario: long propagation (500 m / 1500 m/s ≈ 333 ms) over a
-// short-pipeline (~100 ms in-flight + receiver-buffer depth). Plenty
-// of headroom for a positive gap.
+// With realistic pipeline depths and 333 ms propagation, the chosen gap
+// places the first sample at T_tx_start + propagation within ±1 packet.
 TEST(ArrivalAlignment, GapPlacesFirstSampleAtTxStartPlusPropagation) {
     const time_point now = sw_clock::now();
     const time_point T_tx_start = now - ms(10);  // modem already running 10 ms
@@ -78,10 +70,8 @@ TEST(ArrivalAlignment, GapPlacesFirstSampleAtTxStartPlusPropagation) {
     EXPECT_LE(std::abs(err_us.count()), 510);  // 1 packet at 500 kSPS
 }
 
-// Test 20: If the modem is already past the ideal injection point
-// (T_tx_start + prop is in the past relative to now, considering
-// in-flight depth), the function MUST clamp the gap to 0 and signal
-// "late" via the out parameter.
+// If the ideal injection point is already in the past, the gap must
+// clamp to 0 and the "late" out-parameter must fire.
 TEST(ArrivalAlignment, LateMessageClampsGapToZero) {
     const time_point now = sw_clock::now();
     // Modem started 100 ms ago, propagation is 0 → message should
@@ -99,12 +89,8 @@ TEST(ArrivalAlignment, LateMessageClampsGapToZero) {
     EXPECT_TRUE(late);
 }
 
-// Test 21: Cold-start consequence. Per the plan, when SourceWorker has
-// no TxStartEstimator observation it uses steady_clock::now() as the
-// seed. This means the alignment error per message is bounded by the
-// time between IDLE→TX edge detection and the actual TX start —
-// roughly one USB packet period. Here we exercise that the math
-// itself is stable (no NaN, no huge gap) when T_tx_start == now.
+// Cold-start: when T_tx_start == now the math stays stable (no NaN,
+// gap stays bounded) regardless of pipeline depth or propagation.
 TEST(ArrivalAlignment, EstimatorColdStartProducesBoundedGap) {
     const time_point now = sw_clock::now();
     const double prop_s = 0.0;

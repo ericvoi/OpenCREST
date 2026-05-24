@@ -1,8 +1,8 @@
-# Metrics export (Session D observability)
+# Metrics export
 
 When the scenario's `logging` block opts in, the simulator emits structured
-per-run artifacts intended for consumption by `experiments/` (Session E)
-and beyond. All artifacts share the same `output_directory`.
+per-run artifacts intended for consumption by `experiments/`.
+All artifacts share the same `output_directory`.
 
 ## YAML controls
 
@@ -12,9 +12,9 @@ logging:
   log_raw_tx:                    false   # existing
   log_raw_rx:                    false   # existing
   log_processed:                 false   # existing
-  log_processing_time_histogram: true    # Session D
-  log_message_events:            true    # Session D
-  run_summary_path: ""                   # Session D — empty = default
+  log_processing_time_histogram: true
+  log_message_events:            true
+  run_summary_path: ""                   # empty = default
 ```
 
 Defaults are `false` / empty so existing scenarios produce no new files.
@@ -50,8 +50,7 @@ message (TX-entry → TX-exit edge pair).
   PairBuffer differs from this by the resampler ratio.
 - `sequence_id`: monotonic per `(modem, direction)`. Resets per run.
 
-`direction` is currently always `"tx"`. RX-side events are reserved for
-a future revision; the field is present so consumers don't change shape.
+`direction` is currently always `"tx"`.
 
 ## Per-run summary
 
@@ -98,5 +97,5 @@ bound granularity (≤ ~5 % at 1 ms).
 `underrun_count` is incremented whenever a tick exceeds the
 `PROCESSING_BLOCK_SIZE / sample_rate` deadline.
 
-`log_files.cdc` is populated by the Python experiment harness
-(Session E) — the simulator itself does not read modem CDC.
+`log_files.cdc` is populated by the Python experiment harness —
+the simulator itself does not read modem CDC.

@@ -1,17 +1,10 @@
 """End-to-end smoke test for the Exp 1 analysis pipeline.
 
-The Session F spec asks for an end-to-end cell against MockTransport with
-direct-residual=0 and surface/bottom residuals <5 samples. Per
-``feedback_opencrest_no_test_specific_code.md`` the openCREST binary
-stays test-agnostic and the Python harness wraps it as opaque — so
-"MockTransport" here means: forward-model the geometric scene in Python,
-drop a synthetic TX + RX pair into a fake cell dir, and exercise the
-real ``analyse_cell`` + ``write_residuals_csv`` + ``render_waterfall``
-code path.
-
-If the analysis pipeline drifts (e.g. delay-sample convention flips, or
-the analytical formula doesn't match the IR estimator's lag axis), this
-test catches it without needing real hardware or a built openCREST.
+Synthesises a fake cell directory by forward-modelling the geometric
+scene in Python, then exercises the real ``analyse_cell``,
+``write_residuals_csv`` and ``render_waterfall`` code paths. Catches
+analysis-pipeline drift (delay-sample convention flips, lag-axis
+misalignment) without needing real hardware or a built openCREST.
 """
 from __future__ import annotations
 
@@ -40,7 +33,8 @@ FS = DEFAULT_FS_HZ
 
 
 def _write_wav(path: Path, samples: np.ndarray, fs: int = int(FS)) -> None:
-    """Mono 16-bit PCM. Matches openCREST's stream_logger format."""
+    """Write ``samples`` as mono 16-bit PCM (openCREST's stream_logger
+    format)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     peak = float(np.max(np.abs(samples))) or 1.0
     pcm = np.clip(samples / peak * 32767.0, -32768, 32767).astype("<i2")
@@ -64,15 +58,14 @@ def _synthesize_cell(cell_dir: Path,
                      gamma_surface: float = -0.9,
                      gamma_bottom: float = 0.7,
                      ) -> None:
-    """Build a synthetic (modem_a_tx.wav, modem_b_rx_001.wav) pair for the
+    """Build a synthetic (modem_a_tx.wav, modem_b_rx_*.wav) pair for the
     given range, using the same method-of-images math as the channel.
 
-    The TX is a short LFM chirp at 25 kHz ± 5 kHz bandwidth. The RX is
-    the sum of three scaled+delayed copies (direct/surface/bottom). The
-    direct path is at delay = 0 in the RX *relative to itself*, which
-    matches the IR estimator's convention (positive lag = RX later than
-    TX). Path-loss amplitudes are skipped — the IR estimator picks peak
-    locations, not absolute magnitudes.
+    TX: short LFM chirp at 25 kHz +/- 5 kHz. RX: sum of three
+    scaled+delayed copies (direct / surface / bottom) with the direct
+    path at delay 0 in the RX (matches the IR estimator's
+    positive-lag convention). Path-loss amplitudes are skipped because
+    the IR estimator picks peak locations only.
     """
     cell_dir.mkdir(parents=True, exist_ok=True)
     tx = _lfm(chirp_len, 20_000.0, 30_000.0, FS)
@@ -99,12 +92,10 @@ def _synthesize_cell(cell_dir: Path,
         d = int(round(t.excess_delay_samples))
         rx[d:d + chirp_len] += rel_amps[t.name] * tx
 
-    # The simulator names WAVs by USB serial (modem_registry.cpp builds the
-    # Modem object with usb_serial as its id) — the smoke test must use the
-    # same naming or it'll diverge from the on-disk reality.
+    # WAVs are named by USB serial (matches the simulator). The driver
+    # picks the largest non-empty RX session, so mirror that: rx_001 is a
+    # tiny stub, rx_002 carries the chirp.
     _write_wav(cell_dir / "OA-2-1_tx.wav",       tx)
-    # rx_001 is typically empty on real HW; the chirp lands in rx_002. The
-    # driver picks the largest-non-empty session, so mirror that here.
     _write_wav(cell_dir / "OA-2-2_rx_001.wav",   np.zeros(64, dtype=np.float64))
     _write_wav(cell_dir / "OA-2-2_rx_002.wav",   rx)
 
@@ -123,11 +114,9 @@ def test_direct_residual_is_zero(tmp_path: Path) -> None:
 
 
 def test_surface_and_bottom_residuals_within_five_samples(tmp_path: Path) -> None:
-    """The Session F done-criterion threshold (mean < 5 samples / 10 µs at
-    500 kSPS, p99 < 10 samples). With a synthetic channel and no noise
-    the residual is dominated by integer rounding of the analytical
-    delay — should be well under 1 sample but we allow the spec-stated
-    slack."""
+    """With a synthetic channel and no noise the residual is dominated by
+    integer rounding of the analytical delay (well under 1 sample); the
+    5-sample slack matches the spec threshold."""
     cell_dir = tmp_path / "cell0"
     _synthesize_cell(cell_dir, range_m=500.0)
     a = analyse_cell(cell_dir, range_m=500.0, seed=0)
@@ -141,8 +130,8 @@ def test_surface_and_bottom_residuals_within_five_samples(tmp_path: Path) -> Non
 @pytest.mark.parametrize("range_m", [200.0, 500.0, 1000.0])
 def test_residuals_under_5_samples_across_sweep_extremes(
         tmp_path: Path, range_m: float) -> None:
-    """Same threshold but exercised at both ends of the spec's range
-    sweep so we catch any range-dependent windowing bug."""
+    """Same residual threshold exercised at both ends of the default range
+    sweep to catch range-dependent windowing bugs."""
     cell_dir = tmp_path / f"cell_R{int(range_m)}"
     _synthesize_cell(cell_dir, range_m=range_m)
     a = analyse_cell(cell_dir, range_m=range_m, seed=0)
@@ -175,9 +164,7 @@ def test_residuals_csv_has_one_row_per_path(tmp_path: Path) -> None:
 
 def test_discover_cells_reads_range_and_seed_from_yaml(tmp_path: Path) -> None:
     """The analysis loop walks the output directory and reads each cell's
-    scenario.yaml. Regression for the bug where ``extra_params`` additions
-    broke the analysis loop because cell_ids couldn't be re-derived from
-    the driver-side parameters."""
+    scenario.yaml so it doesn't depend on the runner's param hash."""
     from experiments.exp1_channel_validation import _discover_cells
 
     # Two well-formed cells + one stray directory with no scenario.
@@ -214,4 +201,4 @@ def test_render_waterfall_writes_pdf(tmp_path: Path) -> None:
     pdf_path = tmp_path / "fig_validation.pdf"
     render_waterfall(analyses, pdf_path)
     assert pdf_path.is_file()
-    assert pdf_path.stat().st_size > 1000     # rough sanity
+    assert pdf_path.stat().st_size > 1000

@@ -119,21 +119,15 @@ TEST(MessageEventLogIntegration, FiveScriptedTxMessagesProduceFiveJsonlLines) {
     constexpr size_t per_message[5] = {256, 384, 512, 640, 768};
     for (size_t k = 0; k < 5; ++k) {
         drive_one_message(rt, tx_ring, per_message[k]);
-        // Wait for the SourceWorker to observe the SETTLING edge and
-        // emit the event before pushing the next message. The PairBuffer
-        // populating past base_delay is a deterministic proxy for the
-        // on_message_end having fired.
+        // MessageEventLog flushes per record; size > 0 once the first event lands.
         ASSERT_TRUE(wait_for([&] {
-            // The MessageEventLog flushes per record so the file grows
-            // monotonically; size > 0 once the first event lands.
             return std::ifstream(path).peek() != std::ifstream::traits_type::eof()
                 || k > 0;
         }, std::chrono::milliseconds(500)));
-        // Brief pause to let the worker fully observe the state edge.
+        // Brief pause to let the worker observe the SETTLING edge.
         std::this_thread::sleep_for(std::chrono::milliseconds(15));
         rt.state.store(ModemState::IDLE, std::memory_order_release);
-        // Settle quickly back to IDLE between messages so the next TX
-        // edge is fresh.
+        // Settle back to IDLE so the next TX edge is fresh.
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
@@ -161,9 +155,8 @@ TEST(MessageEventLogIntegration, FiveScriptedTxMessagesProduceFiveJsonlLines) {
 }
 
 TEST(MessageEventLogIntegration, EmitsNothingWhenLogNotWired) {
-    // Without set_message_event_log() the SourceWorker must not produce
-    // any side effects beyond the existing scatter — covers the
-    // "defaults are off" requirement at the source-worker layer.
+    // Without set_message_event_log() the SourceWorker produces no side
+    // effects beyond the existing scatter — "defaults are off".
     ModemRuntimeState rt;
     rt.state.store(ModemState::IDLE, std::memory_order_relaxed);
     SPSCRingBuffer<uint16_t> tx_ring(2048);
@@ -186,7 +179,5 @@ TEST(MessageEventLogIntegration, EmitsNothingWhenLogNotWired) {
 
     worker.stop();
     t.join();
-    // Nothing to assert except that we didn't crash and the worker
-    // still reports samples consumed.
     EXPECT_GT(worker.tx_samples_consumed(), 0u);
 }

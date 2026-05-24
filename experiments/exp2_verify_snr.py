@@ -1,9 +1,9 @@
 """Pre-flight SNR check for the four Exp 2 channel configs.
 
-Run this before ``exp2_ranging_accuracy.py`` to confirm that each
-ranging request still produces a clean response under the configured
-channel — the experiment relies on high SNR so the residual range
-error is dominated by modem-side ranging precision, not packet loss.
+Run before ``exp2_ranging_accuracy.py`` to confirm each ranging request
+produces a clean response under the configured channel. The main
+experiment relies on high SNR so the residual range error is dominated
+by modem-side ranging precision, not packet loss.
 
 For each config a/b/c/d the script:
 
@@ -12,22 +12,17 @@ For each config a/b/c/d the script:
    ranging requests with a short inter-request delay.
 3. After SIGTERM, measures the in-band power of the captured RX WAV
    inside the packet window vs the noise floor outside it, and reports
-   a per-config SNR estimate alongside the ranging success rate.
+   per-config SNR alongside the ranging success rate.
 
-Per-config pass criteria (printed at the end):
+Per-config pass criteria:
 
   success_rate >= --min-success           default 0.8
   SNR(rx_b)    >= --min-snr-db            default 12.0
 
-SNR is measured only at modem B (receiving A's request packet). Modem A's
-RX WAV is reported as info but excluded from the verdict — see
-``VerifyResult.passed`` for the reasoning.
+SNR is measured only at modem B (receiving A's request packet); see
+``VerifyResult.passed`` for why modem A's RX WAV is info-only.
 
 Exit code 0 if every requested config passes both, 1 otherwise.
-
-This is a fast sanity check (~30 s per config) — useful to confirm a
-config is wired up correctly before committing to the ~25 min main
-experiment.
 """
 from __future__ import annotations
 
@@ -71,7 +66,8 @@ DEFAULT_MIN_SNR_DB  = 12.0
 
 def _read_wav_mono(path: Path) -> tuple[np.ndarray, int]:
     """Return ``(samples_float, sample_rate)``. Mono 16-bit PCM only — the
-    simulator's stream_logger writes that exclusively."""
+    simulator's stream_logger writes that exclusively.
+    """
     with wave.open(str(path), "rb") as wf:
         nch = wf.getnchannels()
         sw  = wf.getsampwidth()
@@ -95,12 +91,11 @@ def estimate_snr_db(samples: np.ndarray,
                     ) -> float | None:
     """Crude packet-vs-silence SNR estimate from a single RX WAV.
 
-    Chops the stream into ``window_s``-second blocks, computes RMS for each,
-    and treats the loudest block as the signal estimate and the median of
-    the quietest 25% as the noise floor. ``floor_dbfs`` clamps the noise
-    estimate so a completely silent WAV doesn't blow up the ratio.
-
-    Returns ``None`` if the WAV is too short to chop.
+    Chops the stream into ``window_s``-second blocks, takes the loudest
+    block's RMS as the signal estimate, and the median of the quietest 25%
+    as the noise floor. ``floor_dbfs`` clamps the noise estimate so a
+    completely silent WAV doesn't blow up the ratio. Returns ``None`` if
+    the WAV is too short to chop.
     """
     if samples.size < int(window_s * 500_000):
         return None
@@ -112,7 +107,7 @@ def estimate_snr_db(samples: np.ndarray,
         float(np.sqrt(np.mean(samples[i * block:(i + 1) * block] ** 2)))
         for i in range(n)
     ])
-    # Convert to dBFS for stable comparison.
+    # dBFS for stable comparison.
     eps = 1e-12
     rms_db = 20.0 * np.log10(rms + eps)
     signal_db = float(np.max(rms_db))
@@ -143,18 +138,13 @@ class VerifyResult:
     snr_b_db: float | None     # RX WAV at modem B (request packet from A)
 
     def passed(self, *, min_success: float, min_snr_db: float) -> bool:
-        """Verdict criteria:
-
-        * Success rate at least ``min_success``.
-        * ``rx_b`` SNR at least ``min_snr_db``.
-
-        ``rx_a`` SNR is reported but not used for PASS/FAIL: modem A's RX
-        WAV captures the full autonomous TX/RX cycle (long silent stretches
-        interleaved with brief response packets), so the block-RMS estimator
-        underestimates the true packet-vs-noise ratio. Modem B's RX captures
-        A's request packet — louder, more consistent, more meaningful as a
-        channel-SNR proxy. The ranging channel is symmetric so ``rx_b`` is
-        a good stand-in for the SNR at A on the return path.
+        """PASS if success rate >= ``min_success`` and ``rx_b`` SNR >=
+        ``min_snr_db``. ``rx_a`` SNR is info-only: modem A's RX WAV
+        captures long silent stretches between brief response packets, so
+        block-RMS underestimates the true packet-vs-noise ratio. The
+        ranging channel is symmetric, so ``rx_b`` (which captures A's
+        louder request packet) is a good stand-in for the SNR at A on the
+        return path.
         """
         if self.success_rate < min_success:
             return False

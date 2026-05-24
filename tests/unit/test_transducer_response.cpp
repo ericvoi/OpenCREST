@@ -28,8 +28,8 @@ TEST(FlatResponse, ApplyMultipliesByPrecomputedLinearGain) {
 }
 
 TEST(FlatResponse, ApplyHandlesAlias) {
-    // out aliasing in must work because real call sites will reuse the
-    // same scratch buffer for in/out in the hot path.
+    // out aliasing in must work: callers reuse the same scratch buffer
+    // for in/out in the hot path.
     FlatResponse r(-6.0f);  // ~0.5 linear
     std::array<float, 8> buf{};
     for (size_t i = 0; i < buf.size(); ++i) buf[i] = 1.0f;

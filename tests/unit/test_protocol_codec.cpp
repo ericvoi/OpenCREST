@@ -242,9 +242,9 @@ TEST(ProtocolCodec, CalibrationRoundTrip) {
 }
 
 TEST(ProtocolCodec, CalibrationDefaultsRoundTripCleanly) {
-    // Default-constructed CalibrationData must round-trip — the validator
-    // should accept the project-wide sane defaults (Vref=1.0, fc=25kHz,
-    // PSD=0 for "uncalibrated"). Tests/fixtures rely on this.
+    // Default-constructed CalibrationData round-trips — the validator
+    // accepts project-wide defaults (Vref=1.0, fc=25kHz, PSD=0 for
+    // "uncalibrated").
     CalibrationData cal{};
     std::array<uint8_t, CONTROL_PACKET_BYTES> buf{};
     ProtocolCodec::encode_calibration(buf.data(), cal);
@@ -265,8 +265,6 @@ TEST(ProtocolCodec, DecodeCalibrationWrongType) {
     EXPECT_FALSE(ProtocolCodec::decode_calibration(buf.data(), cal));
 }
 
-// Helper: encode `cal` into `buf` then mutate one field on the wire to an
-// out-of-range value. Verifies decode rejects it.
 TEST(ProtocolCodec, DecodeCalibrationRejectsNegativeNoisePsd) {
     CalibrationData cal{};
     cal.noise_floor_psd_counts_per_sqrt_hz = 0.5f;

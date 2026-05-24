@@ -1,10 +1,10 @@
-"""Experiment 1 — fixed-range channel-model validation (paper §4.2).
+"""Experiment 1 — fixed-range channel-model validation.
 
-Sweeps 17 ranges × 3 seeds = 51 stationary cells through the geometric
-channel. A single Session-A LFM chirp is launched on modem A; modem B's
-RX captures the channel-modified signal. Offline cross-correlation
-recovers the impulse response; analytical method-of-images delays for
-direct / surface / bottom paths are overlaid on the resulting waterfall.
+Sweeps a grid of ranges and seeds through the geometric channel. A single
+firmware LFM chirp is launched on modem A; modem B's RX captures the
+channel-modified signal. Offline cross-correlation recovers the impulse
+response; analytical method-of-images delays for direct / surface /
+bottom paths are overlaid on the resulting waterfall.
 
 Outputs (under ``--out``, default ``experiments/results/exp1/``):
 
@@ -18,13 +18,8 @@ Outputs (under ``--out``, default ``experiments/results/exp1/``):
   residuals.csv                    one row per (range, seed, path)
   fig_validation.pdf               waterfall + analytical overlay
 
-Use ``--seeds N`` to pick the per-range seed count (default 3, the
-paper figure). The IR window, chirp wait, and analysis range can be
-overridden via flags.
-
-Real hardware is required for the actual sweep (two OpenAquatix modems
-with the configured USB serials). For the smoke test against
-``_stub_binary.py`` see ``experiments/tests/test_exp1_smoke.py``.
+Real hardware (two OpenAquatix modems with the configured USB serials) is
+required for the actual sweep.
 """
 from __future__ import annotations
 
@@ -51,10 +46,10 @@ from experiments.lib.runner import CellHandle, Sweep
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "experiments" / "configs" / "exp1" / "exp1_validation.yaml.j2"
 
-DEFAULT_RANGES_M = list(range(200, 1001, 50))    # 17 entries: 200, 250, ..., 1000
+DEFAULT_RANGES_M = list(range(200, 1001, 50))
 DEFAULT_SEEDS = (0, 1, 2)
 DEFAULT_FS_HZ = 500_000.0
-DEFAULT_MAX_DELAY_S = 0.035                       # accommodates surface at R=200
+DEFAULT_MAX_DELAY_S = 0.035    # accommodates surface arrival at R=200 m
 
 # Geometry defaults (kept in sync with the YAML template).
 WATER_DEPTH_M     = 120.0
@@ -62,26 +57,17 @@ SOURCE_DEPTH_M    = 50.0
 RECEIVER_DEPTH_M  = 100.0
 SOUND_SPEED_M_S   = 1500.0
 
-# Worst-case per-cell timing budget:
-#   • simulator init                                    ~1.0 s
-#   • CDC navigation + chirp command                    ~0.3 s
-#   • LFM chirp duration (Session A firmware probe)     ~0.05 s
-#   • one-way propagation at R=1000 m / 1500 m·s⁻¹      ~0.67 s
-#   • multipath excess (≤30 ms across the sweep)        ~0.05 s
-#   • RX-session draining + finalize slack              ~1.5 s
-#   • shutdown safety margin                            ~1.5 s
-# Set to 5.0 s after empirical evidence that 4.0 s sometimes truncated the
-# RX WAV with the chirp landing in the last 100 ms (the StreamLogger
-# finalize beat the chirp arrival to disk).
+# Per-cell wall-clock budget: init + CDC navigation + chirp duration + one-way
+# propagation at the longest range + multipath tail + RX draining + finalize
+# slack. 5 s leaves margin so the RX WAV isn't truncated with the chirp in the
+# last 100 ms.
 DEFAULT_CELL_DURATION_S = 5.0
-SIGTERM_GRACE_S = 6.0          # Simulator's emit_run_summary takes a moment
-DEFAULT_RETRIES = 2            # Transient USB hiccups on modem-open; see usb_transport.cpp
-# Additive trim on the channel chain. With noise.disable=true the Phase-C
-# receiver auto-boost still runs (~+49 dB on the current modem cal), so the
-# chirp at 0.5 source amplitude saturates the receiver DAC by ~50× without
-# this trim. -50 dB lands worst-case constructive multipath peaks at ~0.8
-# of full scale at R=200, and the direct path at ~0.04 at R=1000 — both
-# inside the linear range and well above 12-bit quantization noise.
+SIGTERM_GRACE_S = 6.0
+DEFAULT_RETRIES = 2            # transient USB hiccups on modem open
+# Additive trim on the channel chain to keep the chirp in the linear DAC
+# range. With noise.disable=true the receiver auto-boost still runs (~+49 dB
+# on the current modem cal); -50 dB lands worst-case constructive multipath
+# peaks at ~0.8 of full scale at R=200 m.
 DEFAULT_CHANNEL_GAIN_DB = -50.0
 
 
@@ -90,16 +76,11 @@ DEFAULT_CHANNEL_GAIN_DB = -50.0
 # ---------------------------------------------------------------------------
 
 class _ChirpDriver:
-    """Per-cell ``pre_run``/``post_run`` glue:
-
-    * Waits until the simulator prints its readiness banner to stdout.
-    * Attaches a CDC console to modem A and modem B.
-    * Issues the firmware LFM chirp on modem A.
-
-    The CDC consoles stay attached for the lifetime of the cell so the
-    firmware's per-message debug prints (which include the chirp ack and
-    any RX session boundaries) land in the per-modem ``*_cdc.log`` file
-    for later forensics.
+    """Per-cell ``pre_run`` / ``post_run`` glue: waits for the simulator
+    readiness banner, attaches a CDC console to each modem, issues the
+    firmware LFM chirp on modem A, and detaches at teardown. The CDC
+    consoles stay attached for the lifetime of the cell so per-message
+    debug prints land in the ``*_cdc.log`` file.
     """
 
     READY_PATTERN = re.compile(r"Simulation running")
@@ -131,8 +112,8 @@ class _ChirpDriver:
             log_path   = handle.cell_dir / "modem_b_cdc.log",
         )
         self._consoles[handle.cell_id] = [cdc_a, cdc_b]
-        # The chirp drives normal HIL TX→RX cycling (see feedback_chirp_routing.md);
-        # one trigger is enough to exercise the full multipath structure.
+        # One chirp trigger exercises the full multipath structure (the
+        # firmware drives normal HIL TX→RX cycling around it).
         cdc_a.send_chirp_tx()
 
     def post_run(self, handle: CellHandle) -> None:
@@ -153,8 +134,8 @@ class _ChirpDriver:
                 if self.READY_PATTERN.search(text):
                     return
             time.sleep(0.1)
-        # Don't raise — the cell will run for its full duration and probably
-        # produce no RX; the driver will mark it failed at analysis time.
+        # Don't raise — the cell will run to completion (probably with no
+        # RX) and the analysis step will mark it failed.
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +153,6 @@ class CellAnalysis:
     measured_mag: dict[str, float]      # path -> peak magnitude
     analytical: dict[str, float]        # path -> analytical delay (samples)
 
-
 def analyse_cell(cell_dir: Path,
                  range_m: float,
                  seed: int,
@@ -185,14 +165,11 @@ def analyse_cell(cell_dir: Path,
     """Compute IR + tap residuals for one cell. Returns ``None`` if the
     expected WAV files are missing (cell failed).
 
-    The simulator names WAV files by USB serial (see
-    ``modem_registry.cpp::27`` — the Modem object's ``id()`` is the USB
-    serial, not the YAML modem id). On the RX side the firmware opens a
-    new session every time it enters RX state autonomously; ``rx_001``
-    is usually empty because the firmware opens it at HIL-init before
-    the chirp lands. We pick the largest non-empty session as the chirp
-    carrier — that's the only one that could plausibly contain a 50 ms
-    chirp + multipath tail.
+    The simulator names WAV files by USB serial. On the RX side the
+    firmware opens a new session each time it enters RX state, so the
+    earliest session is typically empty (it covers HIL init before the
+    chirp arrives). The largest non-empty session is treated as the
+    chirp carrier.
     """
     tx_path = cell_dir / f"{tx_modem_serial}_tx.wav"
     rx_path = _largest_rx_session(cell_dir, rx_modem_serial)
@@ -217,9 +194,9 @@ def analyse_cell(cell_dir: Path,
     measured: dict[str, float] = {}
     measured_mag: dict[str, float] = {}
     for name, expected in analytical.items():
-        # Search a ±1 ms window around the analytical delay; pick the
-        # local-max within that window. Robust against any cycle ambiguity
-        # in the chirp's autocorrelation main lobe.
+        # ±1 ms window around the analytical delay, picking the local max.
+        # Robust against cycle ambiguity in the chirp autocorrelation main
+        # lobe.
         half_window = int(round(0.001 * fs_hz))
         lo = max(0, int(round(expected)) - half_window)
         hi = min(mag.size - 1, int(round(expected)) + half_window)
@@ -245,13 +222,9 @@ def analyse_cell(cell_dir: Path,
 
 
 def _largest_rx_session(cell_dir: Path, serial: str) -> Path | None:
-    """Pick the largest ``<serial>_rx_NNN.wav`` file (or None if there are none).
-
-    Firmware opens a new RX session every time the modem enters RX state;
-    rx_001 is typically empty because it covers the simulator's
-    HIL-init transition before the chirp lands. The session that
-    contains the chirp + multipath tail will be substantially larger
-    than the empty/short ones around it.
+    """Pick the largest ``<serial>_rx_NNN.wav`` file (or None if there are
+    none). The session containing the chirp + multipath tail is
+    substantially larger than the empty/short sessions around it.
     """
     candidates = sorted(cell_dir.glob(f"{serial}_rx_*.wav"))
     if not candidates:
@@ -260,6 +233,7 @@ def _largest_rx_session(cell_dir: Path, serial: str) -> Path | None:
 
 
 def write_residuals_csv(analyses: list[CellAnalysis], path: Path) -> None:
+    """Write one row per (cell, path) to ``path``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as fp:
         w = csv.writer(fp)
@@ -313,11 +287,17 @@ def render_waterfall(analyses: list[CellAnalysis],
         cmap       = "viridis",
         x_label    = "Excess delay (ms)",
         y_label    = "Range (m)",
-        cbar_label = "|xcorr| (normalised)",
+        cbar_label = "|xcorr| (dB, normalised)",
         title      = "",
+        log_db     = True,
+        vmin       = -25.0,
+        vmax       = 0.0,
     )
 
-    delays_per_path: dict[str, list[float]] = {"direct": [], "surface": [], "bottom": []}
+    # τ_direct = 0 ms by construction (x-axis is excess delay relative to
+    # the direct path), so only surface and bottom analytical curves are
+    # overlaid.
+    delays_per_path: dict[str, list[float]] = {"surface": [], "bottom": []}
     for R in ranges:
         taps = at.analytical_taps(
             R,
@@ -337,6 +317,21 @@ def render_waterfall(analyses: list[CellAnalysis],
         delays_per_path = {k: np.asarray(v) for k, v in delays_per_path.items()},
         x_unit          = "ms",
     )
+    ax = fig.axes[0]
+    ax.set_xlim(0.0, 30.0)
+    ax.grid(False)
+    ax.xaxis.label.set_size(15)
+    ax.yaxis.label.set_size(15)
+    ax.tick_params(axis="both", labelsize=12)
+    if ax.get_legend() is not None:
+        for txt in ax.get_legend().get_texts():
+            txt.set_fontsize(10)
+    # Colorbar is the second axes on the figure.
+    if len(fig.axes) > 1:
+        cax = fig.axes[1]
+        cax.tick_params(labelsize=12)
+        if cax.yaxis.label.get_text():
+            cax.yaxis.label.set_size(13)
     plotting.save_figure(fig, savepath)
 
 
@@ -352,33 +347,35 @@ def main(argv: list[str] | None = None) -> int:
                    default=str(REPO / "build" / "openCREST"),
                    help="path to the openCREST simulator binary")
     p.add_argument("--seeds", type=int, default=len(DEFAULT_SEEDS),
-                   help="number of seeds per range (default 3)")
+                   help=f"number of seeds per range (default {len(DEFAULT_SEEDS)})")
     p.add_argument("--ranges-m", default=None,
                    help="comma-separated ranges (m) to override the default "
                         "200..1000 step 50 sweep")
     p.add_argument("--modem-a-serial", default="OA-2-1")
     p.add_argument("--modem-b-serial", default="OA-2-2")
     p.add_argument("--duration-s", type=float, default=DEFAULT_CELL_DURATION_S,
-                   help="per-cell wall time before SIGTERM (default 5.0)")
+                   help=f"per-cell wall time before SIGTERM (default "
+                        f"{DEFAULT_CELL_DURATION_S})")
     p.add_argument("--retries", type=int, default=DEFAULT_RETRIES,
-                   help="extra attempts per cell on failure (default 2)")
+                   help=f"extra attempts per cell on failure (default "
+                        f"{DEFAULT_RETRIES})")
     p.add_argument("--channel-gain-db", type=float,
                    default=DEFAULT_CHANNEL_GAIN_DB,
-                   help="additive trim on the channel gain chain to keep the "
-                        "chirp out of saturation (default -50.0). Tune by "
-                        "inspecting the AFE_dB stdout line.")
+                   help=f"additive trim on the channel gain chain to keep "
+                        f"the chirp out of saturation (default "
+                        f"{DEFAULT_CHANNEL_GAIN_DB}). Tune by inspecting "
+                        f"the AFE_dB stdout line.")
     p.add_argument("--fs-hz", type=float, default=DEFAULT_FS_HZ)
     p.add_argument("--max-delay-s", type=float, default=DEFAULT_MAX_DELAY_S,
-                   help="positive-lag window for the IR estimate (default "
-                        "0.035 s = 35 ms, accommodates surface at R=200)")
+                   help=f"positive-lag window for the IR estimate (default "
+                        f"{DEFAULT_MAX_DELAY_S} s)")
     p.add_argument("--check-determinism", action="store_true",
                    help="run a reproducibility pre-flight: re-execute one "
                         "cell twice and assert the xcorr peak locations "
-                        "match within 1 sample per path. Off by default — "
-                        "byte-level identical WAVs are not achievable on "
-                        "real HW because firmware-autonomous RX sessions "
-                        "have nondeterministic zero-padding around the "
-                        "chirp arrival.")
+                        "match within 1 sample per path. Byte-level "
+                        "identical WAVs are not achievable on real HW "
+                        "because firmware-autonomous RX sessions have "
+                        "nondeterministic zero-padding around chirp arrival.")
     p.add_argument("--analysis-only", action="store_true",
                    help="don't run the sweep — only post-process artifacts "
                         "already present in --out")
@@ -460,13 +457,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _discover_cells(out_dir: Path) -> list[tuple[Path, float, int]]:
-    """Walk ``out_dir`` for cell directories and read each one's
-    ``scenario.yaml`` to recover ``(cell_dir, range_m, seed)``.
-
-    Used by the analysis loop instead of recomputing cell ids — the runner
-    hashes all ``extra_params`` into the id, so any sweep-time parameter
-    that the driver doesn't pass back through to the analysis would break
-    a hash-based lookup. Reading the YAML is the source of truth.
+    """Walk ``out_dir`` for cell directories and read each ``scenario.yaml``
+    to recover ``(cell_dir, range_m, seed)``. The YAML is the source of
+    truth — the runner hashes all ``extra_params`` into the cell id, so a
+    hash-based lookup would break whenever the driver added a parameter
+    without threading it through analysis.
     """
     out: list[tuple[Path, float, int]] = []
     for child in sorted(out_dir.iterdir()):
@@ -505,14 +500,10 @@ def _determinism_preflight(det_dir: Path,
                             channel_gain_db: float,
                             ) -> int:
     """Soft determinism: run the same cell twice and compare xcorr peak
-    locations.
-
-    Why not byte-level: on real HW the raw WAV streams contain varying
-    numbers of zero-padding samples around the chirp arrival because the
-    firmware autonomously cycles TX/RX with jitter relative to simulator
-    startup. The interesting deterministic property — that the recovered
-    direct/surface/bottom peak *delays* are stable — is what the paper
-    cares about; byte-equality is too strong.
+    locations. Byte-level equality is too strong because firmware-
+    autonomous TX/RX cycling produces varying amounts of zero-padding
+    around the chirp arrival; the recovered peak *delays* are the
+    invariant of interest.
     """
     sys.stderr.write("[exp1] running determinism pre-flight (xcorr-peak)\n")
     def one(suffix: str) -> Path:

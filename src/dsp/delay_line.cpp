@@ -20,7 +20,7 @@ void DelayLine::write_block(const float* samples, size_t count) {
 }
 
 float DelayLine::read(size_t delay_samples) const {
-    // delay=0 → the sample written most recently (just before write_pos_)
+    // delay=0 → most recently written sample (just before write_pos_).
     const size_t sz  = buffer_.size();
     const size_t idx = (write_pos_ + sz - 1 - delay_samples) % sz;
     return buffer_[idx];

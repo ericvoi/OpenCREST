@@ -251,9 +251,8 @@ TEST(ChannelGeometricDoppler, TwoPathsHaveDistinguishableShifts) {
 }
 
 // ===========================================================================
-// Static-mode regression: building a static-mode Channel and pushing audio
-// must still produce non-trivial energy in the PairBuffer (sanity check).
-// The exhaustive byte-equivalence regression lives in test_channel_pipeline.
+// Static-mode sanity: building a static-mode Channel and pushing audio
+// still produces non-trivial energy in the PairBuffer.
 // ===========================================================================
 
 TEST(ChannelGeometricDoppler, StaticModeStillProducesEnergyAfterRefactor) {

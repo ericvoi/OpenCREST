@@ -2,9 +2,7 @@
 
 namespace openCREST::dsp {
 
-// Anchor the TransducerResponse vtable in this TU so the compiler does
-// not emit a weak vtable in every translation unit that includes the
-// header.
+// Anchor the vtable in this TU to avoid weak vtables in every includer.
 TransducerResponse::~TransducerResponse() = default;
 
 } // namespace openCREST::dsp

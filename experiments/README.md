@@ -35,9 +35,9 @@ experiments/
     wav_io.py                     tolerant WAV reader (handles SIGTERM-truncated files)
     plotting.py                   shared matplotlib helpers (waterfall, ECDF, PER)
     determinism.py                fingerprint diff for repeat runs
-  exp1_channel_validation.py      stub; Session F fills in
-  exp2_ranging_accuracy.py        stub; Session G fills in
-  exp3_janus_per.py               stub; Session H fills in
+  exp1_channel_validation.py      fixed-range channel-model validation
+  exp2_ranging_accuracy.py        two-way ranging accuracy at R=500 m
+  exp3_janus_per.py               JANUS PER vs range across sea states
   tests/
     _stub_binary.py               fake openCREST for hardware-less tests
     test_template.py
@@ -61,8 +61,8 @@ experiments/.venv/bin/python -m pytest experiments/tests/ -v
 ```
 
 These run without any USB hardware attached — they exercise the harness
-against `_stub_binary.py`, a fake openCREST that emits artifacts shaped
-like the real simulator's Session D outputs.
+against `_stub_binary.py`, a fake openCREST that emits artifacts in the
+same shape as the real simulator.
 
 ## Long sweeps (hours-scale): progress + watchdog
 
@@ -81,14 +81,12 @@ For multi-hour sweeps two knobs on `Sweep` matter:
   [sweep] complete: 17 ok, 0 fail, total 8h31m04s
   ```
 
-- **`max_cell_runtime_s`** is an optional hard kill timer. It is independent
-  of `duration_s` and `stop_condition`: when a cell exceeds it, the runner
+- **`max_cell_runtime_s`** is an optional hard kill timer. Independent of
+  `duration_s` and `stop_condition`: when a cell exceeds it, the runner
   forcibly terminates the process and marks the cell **failed** with
-  `error="exceeded max_cell_runtime_s (...s)"`. This is the safety net for
-  message-count-driven experiments where `duration_s` is effectively
-  infinite — without it, a stuck modem would burn the entire planned budget
-  on one stuck cell. Without `max_cell_runtime_s` set, the behaviour is
-  the same as before (no watchdog).
+  `error="exceeded max_cell_runtime_s (...s)"`. Safety net for
+  message-count-driven sweeps with effectively infinite `duration_s`, so
+  one stuck cell can't burn the entire planned budget. Unset → no watchdog.
 
 ### Message-count-driven cells
 
@@ -129,9 +127,9 @@ Each driver writes per-cell artifacts under `experiments/results/<expN>/<cell_id
 and an aggregated `sweep_index.csv` at `experiments/results/<expN>/`. The
 figure PDFs land at `experiments/results/<expN>/fig_*.pdf`.
 
-The drivers in Sessions F/G/H are responsible for the experiment-specific
-post-processing (xcorr-based IR extraction, ranging two-way arithmetic,
-PER binning); the harness only provides the substrate.
+Each driver owns its experiment-specific post-processing (xcorr-based IR
+extraction, ranging two-way arithmetic, PER binning). The harness only
+provides the substrate.
 
 ## Determinism pre-flight
 
@@ -173,7 +171,7 @@ channel-engine counters).
 1. Author a Jinja2 template under `configs/<expN>/` (or include
    `configs/common/two_modem_base.yaml.j2`).
 2. Author `experiments/exp<N>_<name>.py` with a `main(argv)` entry point
-   following the existing stubs. The driver should:
+   following the existing drivers. It should:
    - Build a parameter dict for the sweep.
    - Construct a `Sweep` with that template and parameter cross-product.
    - Optionally attach a `CdcConsole` per modem in `pre_run` to issue
@@ -207,5 +205,4 @@ generic menu-path API:
 
 These are hardcoded against the current firmware menu order (see
 `OpenAquatix-Firmware/Application/Src/COMM/comm_*_menu.c`); they will need
-updating if the firmware menu is reorganised. One regression per
-reorganisation is acceptable, per the Session E plan.
+updating if the firmware menu is reorganised.

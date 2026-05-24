@@ -5,25 +5,20 @@
 
 namespace openCREST {
 
-// Lock-free per-batch processing-time histogram, fed from
+// Lock-free per-batch processing-time histogram, fed by
 // SourceWorker::process_available() with one record() per source-batch.
 //
 // Buckets are log-spaced from 1 µs to 100 ms across 256 slots; record()
-// is allocation-free and ~10 ns. Snapshots are computed off the hot path
-// after the engine has been joined, so the snapshot method itself is not
-// thread-safe with concurrent record() — callers must order shutdown
-// before snapshot().
+// is allocation-free and ~10 ns. snapshot() is not thread-safe against
+// concurrent record() — callers must order shutdown first.
 class ProcessingTimeStats {
 public:
-    // Bucket count is fixed at compile time so storage is a flat array
-    // of atomics — no allocation, no resize, cache-friendly.
+    // Fixed at compile time so storage is a flat atomic array.
     static constexpr size_t kBucketCount = 256;
 
-    // Lower bound (µs) of the log-spaced range. 1 µs catches the
-    // fastest plausible per-batch tick on bare metal.
+    // Log-spaced range bounds: 1 µs catches the fastest plausible per-batch
+    // tick; 100 ms covers any plausible underrun before the modem starves.
     static constexpr double kMinUs = 1.0;
-    // Upper bound (µs) of the log-spaced range. 100 ms safely contains
-    // any plausible underrun before the modem itself would have starved.
     static constexpr double kMaxUs = 100'000.0;
 
     struct Snapshot {
@@ -40,20 +35,17 @@ public:
     ProcessingTimeStats(const ProcessingTimeStats&)            = delete;
     ProcessingTimeStats& operator=(const ProcessingTimeStats&) = delete;
 
-    // Record one observed duration. Increments an underrun counter when
-    // duration_us > deadline_us; pass deadline_us = 0 to disable that
-    // path entirely.
+    // Increments underrun_count when duration_us > deadline_us; pass
+    // deadline_us = 0 to disable that check.
     void record(uint64_t duration_us, uint64_t deadline_us = 0);
 
     Snapshot snapshot() const;
 
     // Map a duration to a histogram bucket index (clamped to range).
-    // Exposed for tests so they can verify bucketing without inspecting
-    // private state.
+    // Exposed for tests.
     static size_t bucket_for(uint64_t duration_us);
 
-    // Inverse of bucket_for — the representative µs value at bucket
-    // boundary i. Exposed for tests.
+    // Representative µs value at bucket boundary i. Exposed for tests.
     static uint64_t bucket_lower_bound(size_t bucket_idx);
 
 private:

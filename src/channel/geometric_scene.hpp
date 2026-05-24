@@ -9,22 +9,21 @@ namespace openCREST {
 
 // One ray-path arrival in the method-of-images scene.
 struct PathTap {
-    float length_m            = 0.0f;  // total slant range, source → receiver
-    float reflection_product  = 1.0f;  // ∏ Γ along the path
+    float length_m            = 0.0f;  // total slant range, source -> receiver
+    float reflection_product  = 1.0f;  // product of Gamma along the path
     bool  has_surface_bounce  = false;
     bool  has_bottom_bounce   = false;
 };
 
-// Method-of-images channel scene: water column with a pressure-release surface
-// at z=0 and a partially-reflective bottom at z=water_depth_m. Given a source
-// depth, receiver depth, and instantaneous horizontal range R, generates up
-// to five enabled path arrivals (direct, surface, bottom, surface→bottom,
-// bottom→surface), sorted by length ascending so the direct path (when
-// enabled) is always first.
+// Method-of-images channel scene: water column with a pressure-release
+// surface at z=0 and a partially-reflective bottom at z=water_depth_m.
+// For a given (source depth, receiver depth, horizontal range R) emits up
+// to five enabled path arrivals (direct, surface, bottom, surface-bottom,
+// bottom-surface), sorted by length ascending.
 //
-// Pure and zero-allocation: compute_paths() / resolve() write into a caller-
-// supplied std::array and return scalar PODs, so the Channel hot path can
-// call them every block.
+// Pure and zero-allocation: compute_paths()/resolve() write into a caller
+// array and return scalar PODs, so the Channel hot path may call them
+// every block.
 class GeometricScene {
 public:
     GeometricScene(const GeometricSceneConfig& geom,
@@ -37,17 +36,16 @@ public:
                               std::array<PathTap, 5>& out) const;
 
     struct ResolvedPath {
-        // Excess over the direct path expressed in fractional receiver-rate
-        // samples. Session C consumes this directly via the per-tap Farrow's
-        // read-style interpolator; legacy static-mode call sites round to
-        // size_t at the call boundary.
+        // Excess over the direct path in fractional receiver-rate samples.
+        // Per-tap Farrow consumes this directly; static-mode call sites
+        // round to size_t at the call boundary.
         double delta_samples_frac;
-        float  gain_linear;         // eq.(2): Γ-product / ℓ^k · 10^(-α·ℓ/20000)
+        float  gain_linear;  // eq.(2): Gamma-product / l^k * 10^(-alpha*l/20000)
     };
 
-    // Convert a single PathTap to its sample-domain (delay, amplitude) pair
-    // given the supplied direct-path length (so reflections come out with
-    // excess delay ≥ 0). center_freq_hz drives Thorp absorption.
+    // Convert one PathTap to (delay, amplitude). `direct_length_m` is the
+    // anchor that makes reflection excess delay >= 0; `center_freq_hz`
+    // drives Thorp absorption.
     ResolvedPath resolve(const PathTap& path,
                          float           direct_length_m,
                          float           center_freq_hz,

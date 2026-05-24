@@ -1,11 +1,9 @@
 name: geometric_ranging_bidir
 description: >
-  Bidirectional geometric-mode scenario for two-way ranging validation.
-  Both modems stationary at R=500 m with full method-of-images multipath
-  (direct + surface + bottom). RTT should match 2·R/c plus the documented
-  3–5 m HW+USB+sim bias from project_ranging_bias_first_message.md.
-  Compares geometric-mode ranging accuracy against the static-mode
-  baseline established 2026-05-18 with two_modem_shallow.
+  Bidirectional geometric-mode scenario for two-way ranging. Both modems
+  stationary at R=500 m with full method-of-images multipath
+  (direct + surface + bottom). RTT should match 2*R/c plus the documented
+  HW+USB+sim bias.
 
 environment:
   sound_speed_m_s: 1500.0
@@ -46,7 +44,7 @@ channels:
       receiver_depth_m: 100.0       # modem B
       gamma_surface: -0.9
       gamma_bottom: 0.7
-      spreading_exponent_k: 2.0     # spherical, matches static path_loss for direct comparison
+      spreading_exponent_k: 2.0     # spherical
       enable_direct: true
       enable_surface: true
       enable_bottom: true

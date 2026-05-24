@@ -12,8 +12,8 @@ using protocol::ProtocolCodec;
 using protocol::CommandId;
 using protocol::StatusPayload;
 
-// Control transfer timeout in ms. Large enough to tolerate one USB polling
-// interval; small enough to not block the main thread noticeably.
+// Control-transfer timeout (ms). Tolerates one USB polling interval while
+// staying short enough that the main thread isn't visibly blocked.
 static constexpr int CTRL_TIMEOUT_MS = 5000;
 
 Modem::Modem(std::unique_ptr<IModemTransport> transport,
@@ -34,7 +34,6 @@ bool Modem::connect() {
 }
 
 CalibrationData Modem::calibrate() {
-    // Send REQUEST_CALIBRATION command
     std::array<uint8_t, protocol::CONTROL_PACKET_BYTES> cmd_buf{};
     ProtocolCodec::encode_command(cmd_buf.data(), CommandId::REQUEST_CALIBRATION);
 
@@ -44,8 +43,8 @@ CalibrationData Modem::calibrate() {
         throw std::runtime_error("Modem::calibrate: failed to send REQUEST_CALIBRATION to '" + id_ + "'");
     }
 
-    // Read the calibration response. The modem may send a status packet first;
-    // retry until we get a calibration response (type == 0x02) or give up.
+    // The modem may send a status packet before the calibration response;
+    // skip non-calibration packets up to MAX_RETRIES.
     std::array<uint8_t, protocol::CONTROL_PACKET_BYTES> resp_buf{};
     constexpr int MAX_RETRIES = 10;
 
@@ -66,7 +65,6 @@ CalibrationData Modem::calibrate() {
                          calibration_.dac_bits, calibration_.dac_sampling_rate);
             return calibration_;
         }
-        // Got a status packet; ignore and retry
     }
 
     throw std::runtime_error("Modem::calibrate: no calibration response from '" + id_ + "' after retries");

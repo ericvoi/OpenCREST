@@ -1,13 +1,12 @@
-"""Experiment 3 — JANUS PER vs range, sea-state sweep (paper §4.4).
+"""Experiment 3 — JANUS PER vs range, static-range per-cell sweep.
 
-Reproduces Fig. 4: JANUS 011_01 packet-error rate as a function of
-instantaneous range during a 1000 m → 200 m approach at v=-2 m/s,
-swept over Wenz sea states {1, 3, 5}. Each cell runs the simulator
-once with the geometric scene from Exp 1 (D=120 m, z_s=50 m, z_r=100 m,
-three macro paths). The host driver issues a JANUS 011_01 SMS once
-every ``--cadence-s`` seconds on modem A; modem B's CDC console prints
-a multi-line decode block for every JANUS frame that decodes. PER
-per range bin is 1 − (received / total).
+Sweeps JANUS 011_01 packet-error rate as a function of range across
+multiple Wenz sea states. Each cell runs the simulator at one
+(range, sea_state, seed) tuple with both modems stationary, sends N
+JANUS messages, scores PER, then tears down. One simulator process per
+range value because the geometric scene resets R to ``initial_range_m``
+on every TX, so a within-process closing-range sweep would transmit
+every packet at R0.
 
 Outputs (under ``--out``, default ``experiments/results/exp3/``):
 
@@ -16,16 +15,16 @@ Outputs (under ``--out``, default ``experiments/results/exp3/``):
   <cell>/modem_a_cdc.log, modem_b_cdc.log
   <cell>/modem_a_events.jsonl
   <cell>/tx_log.csv             host-driver TX requests
-  <cell>/cell_meta.json         {simulator_spawn_ns, r0_m, v_m_s, ...}
+  <cell>/cell_meta.json         {range_m, sea_state, seed, ...}
 
-  per_vs_range.csv              long-form: sea_state, seed, range_bin_m, n_total, n_received, per
-  processing_table.csv          sustained-throughput sanity per cell
-  fig_janus_per.pdf             paper Fig. 4
+  per_vs_range.csv              long-form: range_m, sea_state, seed,
+                                n_total, n_received, per
+  per_vs_range_pooled.csv       pooled across seeds with Wilson 95% CI
+  processing_table.csv          per-cell processing-time table
+  fig_janus_per.pdf             PER vs range, one curve per sea state
 
-The simulator binary stays test-agnostic (per
-``feedback_opencrest_no_test_specific_code.md``); all JANUS-specific
-behaviour lives here. Modems are pre-configured in JANUS mode out of
-band — the driver does not flip the firmware protocol parameter.
+Modems must be pre-configured in JANUS mode out of band; the driver does
+not flip the firmware protocol parameter.
 """
 from __future__ import annotations
 
@@ -34,15 +33,12 @@ import csv
 import json
 import math
 import re
-import statistics
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
-
-import numpy as np
+from typing import Callable, Sequence
 
 from experiments.lib import plotting
 from experiments.lib.cdc_console import CdcConsole
@@ -53,46 +49,37 @@ REPO        = Path(__file__).resolve().parents[1]
 CONFIG_DIR  = REPO / "experiments" / "configs" / "exp3"
 TEMPLATE    = CONFIG_DIR / "exp3_janus_per.yaml.j2"
 
-# Geometric scene parameters that must match the YAML template. The driver
-# uses these to compute range-at-TX and the multipath-delay vertical
-# annotations on the figure; they are *not* the source of truth for the
-# simulator (the YAML is). If the template changes these values, update
-# the constants here.
-INITIAL_RANGE_M     = 1000.0
-RANGE_FLOOR_M       =  200.0
-# Default closing velocity. Reduced from the paper's -2.0 m/s because the
-# OpenAquatix firmware demodulates cargo symbols on a fixed timing grid
-# derived from preamble sync — there is no per-symbol re-sync — and v=-2
-# produces ~1/3..1/2 a symbol of window drift over a single 250–350-symbol
-# cargo at the baud rate used here. v=-1 keeps the drift under 1/4 of a
-# symbol, which is inside the cargo demod's tolerance.
-DEFAULT_CLOSING_VELOCITY_M_S = -1.0
+# Geometric scene parameters that mirror the YAML template; used here only
+# for figure annotations.
 SOUND_SPEED_M_S     = 1500.0
 WATER_DEPTH_M       = 120.0
 SOURCE_DEPTH_M      =  50.0
 RECEIVER_DEPTH_M    = 100.0
 
-# Band E JANUS: 250 symbols/sec → ~4 ms symbol period.
-JANUS_BAUD          = 250.0
+# Band E JANUS: 250 symbols/sec, ~4 ms symbol period.
+JANUS_BAUD            = 250.0
 JANUS_SYMBOL_PERIOD_S = 1.0 / JANUS_BAUD
 
+# Default sweep grid.
+DEFAULT_RANGES_M    = (200.0, 300.0, 400.0, 500.0,
+                       600.0, 700.0, 800.0, 900.0, 1000.0)
 DEFAULT_SEA_STATES  = (1, 3, 5)
 DEFAULT_SEEDS       = 5
-DEFAULT_CADENCE_S   = 5.0          # firmware-limited minimum
+DEFAULT_PACKETS_PER_CELL = 15
+
+# Closing velocity (negative = approaching). At v=-1 m/s the within-message
+# symbol-clock drift is enough to produce graded cargo decode failures
+# while still letting most packets sync. Pure-static (v=0) gives binary
+# PER curves concentrated at the SNR sync threshold.
+DEFAULT_CLOSING_VELOCITY_M_S = -1.0
+
+DEFAULT_CADENCE_S            = 5.0   # firmware-limited minimum
 DEFAULT_FIRST_REQUEST_DELAY_S = 5.0
-DEFAULT_RX_GRACE_S  = 8.0          # extra wait after last TX for late RX prints
+DEFAULT_RX_GRACE_S           = 8.0   # wait after last TX for late RX prints
 
-# 100 m bins from 200 m to 1000 m → 8 bins.
-DEFAULT_BIN_EDGES_M = [200.0, 300.0, 400.0, 500.0,
-                       600.0, 700.0, 800.0, 900.0, 1000.0]
-
-DEFAULT_MAX_CELL_RUNTIME_S = 1200.0    # 20 min wall-cap per cell;
-                                       # at v=-1 the natural cell is ~13.5 min
-                                       # so this leaves ~6 min of headroom for
-                                       # init/grace, and a wedged cell costs
-                                       # only ~7 min over baseline (vs the
-                                       # previous 17 min). Bump back up if you
-                                       # drop velocity to -0.5.
+# Per-cell wall-clock ceiling. Bounds a wedged cell without retrying
+# indefinitely.
+DEFAULT_MAX_CELL_RUNTIME_S = 300.0
 SIGTERM_GRACE_S = 6.0
 
 SMS_PROBE_RE  = re.compile(r"SMS:\s*PROBE\s+(\d+)")
@@ -100,7 +87,7 @@ READY_PATTERN = re.compile(r"Simulation running")
 
 
 # ---------------------------------------------------------------------------
-# Pure analysis primitives (target for TDD tests)
+# Pure analysis primitives
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -111,53 +98,36 @@ class TxRequest:
 
 
 @dataclass
-class TxEvent:
-    sequence_id:  int           # firmware-emitted monotonic TX counter
-    start_ns:     int
-    end_ns:       int
-    sample_count: int
+class CellResult:
+    """Per-cell PER summary. One cell = one (range, sea_state, seed) tuple."""
+    range_m:    float
+    sea_state:  int
+    seed:       int
+    n_total:    int
+    n_received: int
+
+    @property
+    def per(self) -> float:
+        if self.n_total <= 0:
+            return float("nan")
+        return 1.0 - self.n_received / self.n_total
 
 
 @dataclass
-class TxRecord:
-    request_id:        int
-    payload:           str
-    tx_event_start_ns: int
-    range_at_tx_m:     float
-    received:          bool
-
-
-@dataclass
-class PerBin:
-    lo_m:       float
-    hi_m:       float
+class PooledPoint:
+    """Pooled (range, sea_state) PER + Wilson 95% CI."""
+    range_m:    float
+    sea_state:  int
     n_total:    int
     n_received: int
     per:        float           # NaN when n_total == 0
-
-
-def compute_range_at_tx(event_start_ns:      int,
-                        simulator_spawn_ns:  int,
-                        r0_m:                float,
-                        v_m_s:               float) -> float:
-    """Closed-form geometric R(t).
-
-    The simulator parametrises the geometric scene by receiver-side sample
-    cursor, which in steady state advances at wall-clock rate — so the
-    monotonic-ns delta between TX-event start and simulator spawn is a good
-    proxy for the scene's internal ``t`` (within the few-second initialisation
-    delay that's identical across cells).
-    """
-    t_s = (event_start_ns - simulator_spawn_ns) / 1e9
-    return float(r0_m + v_m_s * t_s)
+    ci_lo:      float           # NaN when n_total == 0
+    ci_hi:      float
 
 
 def parse_sms_seq(line: str) -> int | None:
-    """Extract the PROBE sequence number from a firmware decode line, or
-    ``None`` if the line isn't a PROBE payload.
-
-    Modem firmware prints a multi-line block on every JANUS RX (see
-    ``comm_print.c``); the only line we care about is ``SMS: <payload>``.
+    """Extract the PROBE sequence number from a firmware ``SMS: PROBE NNN``
+    line, or ``None`` if the line isn't a PROBE payload.
     """
     if not isinstance(line, str):
         return None
@@ -176,9 +146,9 @@ def wilson_ci(n_failures: int,
     """Wilson score 95% confidence interval for a binomial proportion.
 
     Returns ``(lo, hi)`` such that the true PER is in ``[lo, hi]`` with
-    ~95% confidence. Used in place of the Wald interval because Wald
-    misbehaves when ``p`` is near 0 or 1, exactly where this experiment's
-    PER spends most of its time. Returns ``(NaN, NaN)`` for empty bins.
+    ~95% confidence; preferred over the Wald interval because PER spends
+    most of its time near 0 or 1 where Wald misbehaves. Returns
+    ``(NaN, NaN)`` for empty bins.
     """
     if n_total <= 0:
         return (float("nan"), float("nan"))
@@ -190,38 +160,27 @@ def wilson_ci(n_failures: int,
     return (max(0.0, center - margin), min(1.0, center + margin))
 
 
-def aggregate_per(records: Sequence[TxRecord],
-                  bin_edges_m: Sequence[float]) -> list[PerBin]:
-    """Bin records by ``range_at_tx_m`` into half-open ``[lo, hi)`` bins.
-
-    Records whose range falls outside the lowest/highest edge are dropped.
-    Empty bins report ``per = NaN`` so they don't pollute downstream
-    aggregations (e.g. mean across seeds).
+def pool_across_seeds(cells: Sequence[CellResult]) -> list[PooledPoint]:
+    """Group cells by (range, sea_state), sum n_total / n_received, and
+    compute the Wilson CI on the pooled count. Pooled counts are the
+    correct estimator for an unequal-n binomial mean — better than
+    averaging per-seed PERs.
     """
-    if len(bin_edges_m) < 2:
-        return []
-    edges = list(bin_edges_m)
-    n_bins = len(edges) - 1
-    totals = [0] * n_bins
-    received = [0] * n_bins
-    for r in records:
-        rng = r.range_at_tx_m
-        if rng < edges[0] or rng >= edges[-1]:
+    buckets: dict[tuple[float, int], list[int]] = {}
+    for c in cells:
+        key = (float(c.range_m), int(c.sea_state))
+        b = buckets.setdefault(key, [0, 0])
+        b[0] += c.n_total
+        b[1] += c.n_received
+    out: list[PooledPoint] = []
+    for (r, ss), (tot, rcv) in sorted(buckets.items()):
+        if tot == 0:
+            out.append(PooledPoint(r, ss, 0, 0,
+                                   float("nan"), float("nan"), float("nan")))
             continue
-        # bisect: find the index i s.t. edges[i] <= rng < edges[i+1].
-        # Edges are small, linear scan is fine.
-        for i in range(n_bins):
-            if edges[i] <= rng < edges[i + 1]:
-                totals[i] += 1
-                if r.received:
-                    received[i] += 1
-                break
-    out: list[PerBin] = []
-    for i in range(n_bins):
-        n = totals[i]
-        per = (1.0 - received[i] / n) if n else float("nan")
-        out.append(PerBin(lo_m=edges[i], hi_m=edges[i + 1],
-                          n_total=n, n_received=received[i], per=per))
+        per = 1.0 - rcv / tot
+        lo, hi = wilson_ci(tot - rcv, tot)
+        out.append(PooledPoint(r, ss, tot, rcv, per, lo, hi))
     return out
 
 
@@ -249,43 +208,8 @@ def load_tx_log(cell_dir: Path) -> list[TxRequest]:
     return out
 
 
-def load_modem_a_events(cell_dir: Path) -> list[TxEvent]:
-    """Parse modem_a_events.jsonl, returning TX events in start-time order."""
-    path = cell_dir / "modem_a_events.jsonl"
-    out: list[TxEvent] = []
-    if not path.is_file():
-        return out
-    for raw in path.read_text().splitlines():
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            doc = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if doc.get("direction") != "tx":
-            continue
-        try:
-            out.append(TxEvent(
-                sequence_id  = int(doc.get("sequence_id", -1)),
-                start_ns     = int(doc["start_ns"]),
-                end_ns       = int(doc["end_ns"]),
-                sample_count = int(doc.get("sample_count", 0)),
-            ))
-        except (KeyError, ValueError):
-            continue
-    out.sort(key=lambda e: e.start_ns)
-    return out
-
-
 def load_received_seqs(cell_dir: Path) -> set[int]:
-    """Scan modem_b_cdc.log for ``SMS: PROBE NNN`` lines.
-
-    The log is the raw CDC-console output (one timestamped line per
-    firmware print), so any line containing the SMS payload counts as a
-    decode regardless of whether the surrounding decode-block lines made
-    it into the queue.
-    """
+    """Scan modem_b_cdc.log for ``SMS: PROBE NNN`` lines."""
     path = cell_dir / "modem_b_cdc.log"
     if not path.is_file():
         return set()
@@ -298,7 +222,6 @@ def load_received_seqs(cell_dir: Path) -> set[int]:
 
 
 def load_cell_meta(cell_dir: Path) -> dict:
-    """Load the host-side per-cell metadata (spawn ns, sea state, etc.)."""
     path = cell_dir / "cell_meta.json"
     if not path.is_file():
         return {}
@@ -318,6 +241,35 @@ def load_summary(cell_dir: Path) -> dict | None:
         return None
 
 
+def _cell_is_valid(cell_dir: Path) -> bool:
+    """Heuristic check that a finished cell is usable for analysis. Catches
+    silent-failure modes (CDC reader died mid-cell, modem TTY couldn't be
+    opened, simulator wedged before any TX, watchdog killed the cell during
+    init) without parsing the full artifacts. Requires tx_log.csv to have
+    at least one request row and modem_b_cdc.log to be present and at
+    least 100 bytes.
+    """
+    tx_log  = cell_dir / "tx_log.csv"
+    cdc_log = cell_dir / "modem_b_cdc.log"
+    if not tx_log.is_file():
+        return False
+    try:
+        with tx_log.open() as fp:
+            rows = sum(1 for _ in fp)
+    except OSError:
+        return False
+    if rows < 2:                # header + at least one request
+        return False
+    if not cdc_log.is_file():
+        return False
+    try:
+        if cdc_log.stat().st_size < 100:
+            return False
+    except OSError:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Per-cell analysis
 # ---------------------------------------------------------------------------
@@ -325,93 +277,26 @@ def load_summary(cell_dir: Path) -> dict | None:
 @dataclass
 class CellAnalysis:
     cell_dir:   Path
-    sea_state:  int
-    seed:       int
-    records:    list[TxRecord]
+    result:     CellResult
     summary:    dict | None
-
-
-def _match_requests_to_events(requests: Sequence[TxRequest],
-                              events:   Sequence[TxEvent]) -> list[tuple[TxRequest, TxEvent | None]]:
-    """Pair each host TX request with the first modem-A TX event whose
-    ``start_ns`` is no earlier than the request's ``request_ts_ns`` (allowing
-    a small back-slack for clock-edge effects).
-
-    Events are consumed in start-time order; once an event is matched it
-    isn't reused. Unmatched requests are paired with ``None``.
-
-    With a 5 s cadence and a non-bursty firmware, this is a clean 1:1 in
-    practice; the slack is just defensive.
-    """
-    out: list[tuple[TxRequest, TxEvent | None]] = []
-    ev_iter = iter(events)
-    # Negative slack: an event whose start_ns is up to 100 ms BEFORE the
-    # request_ts_ns is still considered "this request's event" — the host's
-    # clock and the simulator's may have <ms skew, and we'd rather match
-    # eagerly than drop legitimate pairings.
-    SLACK_NS = 100_000_000
-    pending: TxEvent | None = next(ev_iter, None)
-    for req in requests:
-        while pending is not None and pending.start_ns < req.request_ts_ns - SLACK_NS:
-            pending = next(ev_iter, None)
-        if pending is None:
-            out.append((req, None))
-            continue
-        out.append((req, pending))
-        pending = next(ev_iter, None)
-    return out
-
-
-def build_tx_records(requests:           Sequence[TxRequest],
-                     events:             Sequence[TxEvent],
-                     received_seqs:      set[int],
-                     simulator_spawn_ns: int,
-                     r0_m:               float,
-                     v_m_s:              float) -> list[TxRecord]:
-    pairs = _match_requests_to_events(requests, events)
-    records: list[TxRecord] = []
-    for req, ev in pairs:
-        if ev is None:
-            # Request never produced an observable firmware TX — count it as
-            # an emitted-but-unobserved packet at the host-time-implied range.
-            ev_start = req.request_ts_ns
-        else:
-            ev_start = ev.start_ns
-        rng = compute_range_at_tx(
-            event_start_ns      = ev_start,
-            simulator_spawn_ns  = simulator_spawn_ns,
-            r0_m                = r0_m,
-            v_m_s               = v_m_s,
-        )
-        records.append(TxRecord(
-            request_id        = req.request_id,
-            payload           = req.payload,
-            tx_event_start_ns = ev_start,
-            range_at_tx_m     = rng,
-            received          = req.request_id in received_seqs,
-        ))
-    return records
 
 
 def analyse_cell(cell_dir: Path) -> CellAnalysis | None:
     """Materialise the per-cell analysis from artifacts in ``cell_dir``.
-
-    Returns ``None`` if the cell doesn't have a tx_log.csv (e.g. a Sweep
-    cell that aborted before pre_run wrote any host-side artifacts).
+    Returns ``None`` if the cell lacks tx_log.csv or cell_meta.json (e.g.
+    a cell that aborted before pre_run wrote any host-side artifacts).
     """
     meta     = load_cell_meta(cell_dir)
     requests = load_tx_log(cell_dir)
     if not requests:
         return None
-    events     = load_modem_a_events(cell_dir)
-    received   = load_received_seqs(cell_dir)
-    summary    = load_summary(cell_dir)
+    if "range_m" not in meta:
+        return None
+    received = load_received_seqs(cell_dir)
+    summary  = load_summary(cell_dir)
 
-    # Loud warning for the classic silent-failure mode: the CDC console
-    # couldn't open modem B's TTY (e.g. picocom/screen had it), so the log
-    # is empty and every TX gets scored as lost regardless of what actually
-    # happened over the air. Without this, you get a clean-looking PER=1.0
-    # plot with no hint that the harness never saw any decodes.
+    # Loud warning for the silent-failure mode that _cell_is_valid
+    # catches.
     cdc_path = cell_dir / "modem_b_cdc.log"
     cdc_size = cdc_path.stat().st_size if cdc_path.is_file() else 0
     if requests and not received and cdc_size < 100:
@@ -422,26 +307,21 @@ def analyse_cell(cell_dir: Path) -> CellAnalysis | None:
             "Check that no other terminal program (picocom/screen/IDE serial "
             "monitor) is holding /dev/ttyACM*. PER for this cell will read "
             "as 1.0 regardless of actual on-air decode success.\n")
-    spawn_ns   = int(meta.get("simulator_spawn_ns", 0))
-    r0_m       = float(meta.get("r0_m",  INITIAL_RANGE_M))
-    v_m_s      = float(meta.get("v_m_s", DEFAULT_CLOSING_VELOCITY_M_S))
-    sea_state  = int(meta.get("sea_state", -1))
-    seed       = int(meta.get("seed",      -1))
 
-    records = build_tx_records(
-        requests           = requests,
-        events             = events,
-        received_seqs      = received,
-        simulator_spawn_ns = spawn_ns,
-        r0_m               = r0_m,
-        v_m_s              = v_m_s,
+    requested_ids = {r.request_id for r in requests}
+    n_received    = len(requested_ids & received)
+    result = CellResult(
+        range_m    = float(meta["range_m"]),
+        sea_state  = int(meta.get("sea_state", -1)),
+        seed       = int(meta.get("seed",      -1)),
+        n_total    = len(requests),
+        n_received = n_received,
     )
-    return CellAnalysis(cell_dir=cell_dir, sea_state=sea_state, seed=seed,
-                        records=records, summary=summary)
+    return CellAnalysis(cell_dir=cell_dir, result=result, summary=summary)
 
 
 def analyse(out_dir: Path) -> list[CellAnalysis]:
-    """Walk ``out_dir`` for every cell with a cell_meta.json + tx_log.csv."""
+    """Walk ``out_dir`` for every cell with a tx_log.csv + cell_meta.json."""
     out: list[CellAnalysis] = []
     for child in sorted(out_dir.iterdir()):
         if not child.is_dir():
@@ -456,60 +336,54 @@ def analyse(out_dir: Path) -> list[CellAnalysis]:
 # CSV writers
 # ---------------------------------------------------------------------------
 
-def write_per_vs_range_csv(analyses:    Sequence[CellAnalysis],
-                           path:        Path,
-                           bin_edges_m: Sequence[float] = DEFAULT_BIN_EDGES_M) -> None:
-    """Long-form per-cell per-bin counts. One row per (cell, bin)."""
+def write_per_vs_range_csv(analyses: Sequence[CellAnalysis],
+                           path:     Path) -> None:
+    """Long-form per-cell PER. One row per (range, sea_state, seed)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    rows = sorted((a.result for a in analyses),
+                  key=lambda r: (r.range_m, r.sea_state, r.seed))
     with path.open("w", newline="") as fp:
         w = csv.writer(fp)
-        w.writerow(["sea_state", "seed", "range_bin_lo_m", "range_bin_hi_m",
+        w.writerow(["range_m", "sea_state", "seed",
                     "n_total", "n_received", "per"])
-        for a in analyses:
-            bins = aggregate_per(a.records, bin_edges_m)
-            for b in bins:
-                w.writerow([
-                    a.sea_state,
-                    a.seed,
-                    f"{b.lo_m:.1f}",
-                    f"{b.hi_m:.1f}",
-                    b.n_total,
-                    b.n_received,
-                    ("" if math.isnan(b.per) else f"{b.per:.6f}"),
-                ])
+        for r in rows:
+            w.writerow([
+                f"{r.range_m:.1f}",
+                r.sea_state,
+                r.seed,
+                r.n_total,
+                r.n_received,
+                ("" if math.isnan(r.per) else f"{r.per:.6f}"),
+            ])
 
 
-def write_pooled_per_csv(analyses:    Sequence[CellAnalysis],
-                         path:        Path,
-                         bin_edges_m: Sequence[float] = DEFAULT_BIN_EDGES_M) -> None:
-    """Pooled-across-seeds per-(sea_state, bin) PER + Wilson 95% CI.
-
-    This is the table that backs the paper figure's CI bands — one row
-    per (sea_state, range_bin), with the count pooled across seeds so the
-    Wilson interval reflects the full sample size rather than per-seed
-    sub-samples.
+def write_pooled_per_csv(analyses: Sequence[CellAnalysis],
+                         path:     Path) -> None:
+    """Pooled-across-seeds PER per (range, sea_state) + Wilson 95% CI. One
+    row per (range, sea_state), with the count pooled across seeds so the
+    Wilson interval reflects the full sample size.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    by_state: dict[int, list[CellAnalysis]] = {}
-    for a in analyses:
-        by_state.setdefault(a.sea_state, []).append(a)
+    pooled = pool_across_seeds([a.result for a in analyses])
     with path.open("w", newline="") as fp:
         w = csv.writer(fp)
-        w.writerow(["sea_state", "range_bin_center_m",
-                    "n_total", "per", "per_ci_lo", "per_ci_hi"])
-        for ss in sorted(by_state):
-            for b in _aggregate_across_seeds(by_state[ss], ss, bin_edges_m):
-                if math.isnan(b.per):
-                    w.writerow([ss, f"{b.center_m:.1f}", b.n_total, "", "", ""])
-                else:
-                    w.writerow([
-                        ss,
-                        f"{b.center_m:.1f}",
-                        b.n_total,
-                        f"{b.per:.6f}",
-                        f"{b.ci_lo:.6f}",
-                        f"{b.ci_hi:.6f}",
-                    ])
+        w.writerow(["range_m", "sea_state",
+                    "n_total", "n_received",
+                    "per", "per_ci_lo", "per_ci_hi"])
+        for p in pooled:
+            if math.isnan(p.per):
+                w.writerow([f"{p.range_m:.1f}", p.sea_state,
+                            p.n_total, p.n_received, "", "", ""])
+            else:
+                w.writerow([
+                    f"{p.range_m:.1f}",
+                    p.sea_state,
+                    p.n_total,
+                    p.n_received,
+                    f"{p.per:.6f}",
+                    f"{p.ci_lo:.6f}",
+                    f"{p.ci_hi:.6f}",
+                ])
 
 
 def write_processing_table_csv(analyses: Sequence[CellAnalysis],
@@ -517,12 +391,14 @@ def write_processing_table_csv(analyses: Sequence[CellAnalysis],
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as fp:
         w = csv.writer(fp)
-        w.writerow(["sea_state", "seed", "mean_us", "p99_us",
-                    "max_us", "underruns"])
+        w.writerow(["range_m", "sea_state", "seed",
+                    "mean_us", "p99_us", "max_us", "underruns"])
         for a in analyses:
             pt = (a.summary or {}).get("processing_time", {}) or {}
             w.writerow([
-                a.sea_state, a.seed,
+                f"{a.result.range_m:.1f}",
+                a.result.sea_state,
+                a.result.seed,
                 pt.get("mean_us",       ""),
                 pt.get("p99_us",        ""),
                 pt.get("max_us",        ""),
@@ -534,54 +410,9 @@ def write_processing_table_csv(analyses: Sequence[CellAnalysis],
 # Figure
 # ---------------------------------------------------------------------------
 
-@dataclass
-class PooledBin:
-    center_m: float
-    per:      float           # NaN when n_total == 0
-    ci_lo:    float           # NaN when n_total == 0
-    ci_hi:    float
-    n_total:  int
-
-
-def _aggregate_across_seeds(analyses:    Sequence[CellAnalysis],
-                            sea_state:   int,
-                            bin_edges_m: Sequence[float]) -> list[PooledBin]:
-    """For one sea state, pool seeds bin-by-bin into per-bin PER + CI.
-
-    Pooled counts (n_received / n_total across all seeds) are the correct
-    estimator for an unequal-n binomial mean — better than averaging
-    per-seed PERs. The Wilson CI is computed on the pooled total.
-    """
-    n_bins = len(bin_edges_m) - 1
-    tot = [0] * n_bins
-    rcv = [0] * n_bins
-    for a in analyses:
-        if a.sea_state != sea_state:
-            continue
-        for i, b in enumerate(aggregate_per(a.records, bin_edges_m)):
-            tot[i] += b.n_total
-            rcv[i] += b.n_received
-    out: list[PooledBin] = []
-    for i in range(n_bins):
-        center  = 0.5 * (bin_edges_m[i] + bin_edges_m[i + 1])
-        if tot[i] == 0:
-            out.append(PooledBin(center, float("nan"),
-                                 float("nan"), float("nan"), 0))
-            continue
-        n_failed = tot[i] - rcv[i]
-        per      = n_failed / tot[i]
-        lo, hi   = wilson_ci(n_failed, tot[i])
-        out.append(PooledBin(center, per, lo, hi, tot[i]))
-    return out
-
-
 def _surface_path_threshold_range_m(symbol_period_s: float) -> float | None:
-    """Range at which surface-bounce excess delay = one JANUS symbol period.
-
-    Geometry: direct  = sqrt(R² + (z_r-z_s)²)
-              surface = sqrt(R² + (z_s+z_r)²)
-    Excess Δ = surface − direct.  Solve Δ/c = T_sym for R.
-    Returns ``None`` if the threshold falls outside the swept range.
+    """Range at which the surface-bounce excess delay equals one JANUS
+    symbol period. Returns ``None`` if the threshold is unsolvable.
     """
     return _path_threshold_range_m(
         h_direct_m  = abs(RECEIVER_DEPTH_M - SOURCE_DEPTH_M),
@@ -591,13 +422,8 @@ def _surface_path_threshold_range_m(symbol_period_s: float) -> float | None:
 
 
 def _bottom_path_threshold_range_m(symbol_period_s: float) -> float | None:
-    """Same as surface but for the bottom bounce.
-
-    Geometry: bottom path height = (D - z_s) + (D - z_r) = 90 m for the
-    default scene. The bottom-bounce excess delay shrinks slower than
-    surface as R grows, so the crossover sits further out than the
-    surface one.
-    """
+    """Range at which the bottom-bounce excess delay equals one JANUS
+    symbol period."""
     return _path_threshold_range_m(
         h_direct_m  = abs(RECEIVER_DEPTH_M - SOURCE_DEPTH_M),
         h_bounce_m  = (WATER_DEPTH_M - SOURCE_DEPTH_M) + (WATER_DEPTH_M - RECEIVER_DEPTH_M),
@@ -608,10 +434,7 @@ def _bottom_path_threshold_range_m(symbol_period_s: float) -> float | None:
 def _path_threshold_range_m(h_direct_m: float,
                             h_bounce_m: float,
                             excess_m:   float) -> float | None:
-    """Solve √(R² + h_b²) − √(R² + h_d²) = excess for R≥0."""
-    # Algebra: let u = R² + h_d². Then √(u + (h_b² − h_d²)) = √u + excess
-    # ⇒ u + (h_b² − h_d²) = u + 2·excess·√u + excess²
-    # ⇒ √u = (h_b² − h_d² − excess²) / (2·excess)
+    """Solve sqrt(R^2 + h_b^2) - sqrt(R^2 + h_d^2) = excess for R >= 0."""
     if excess_m <= 0:
         return None
     num = h_bounce_m ** 2 - h_direct_m ** 2 - excess_m ** 2
@@ -625,43 +448,48 @@ def _path_threshold_range_m(h_direct_m: float,
     return float(math.sqrt(R2))
 
 
-def render_per_figure(analyses:    Sequence[CellAnalysis],
-                      savepath:    Path,
-                      bin_edges_m: Sequence[float] = DEFAULT_BIN_EDGES_M,
-                      sea_states:  Sequence[int]   = DEFAULT_SEA_STATES) -> None:
-    """Family of curves (one per sea state) — paper Fig. 4."""
-    import matplotlib.pyplot as plt           # local import; plotting is opt
+def render_per_figure(analyses:   Sequence[CellAnalysis],
+                      savepath:   Path,
+                      sea_states: Sequence[int] = DEFAULT_SEA_STATES) -> None:
+    """PER-vs-range curves, one per sea state."""
+    import matplotlib.pyplot as plt           # local: plotting is optional
     fig, ax = plt.subplots(figsize=(7.0, 4.2))
 
-    # Vertical annotations at the ranges where each path's excess delay
-    # equals one JANUS symbol period (the "narrative payoff" of the figure).
-    for label, fn in (("surface (1 sym)", _surface_path_threshold_range_m),
-                      ("bottom  (1 sym)", _bottom_path_threshold_range_m)):
-        R = fn(JANUS_SYMBOL_PERIOD_S)
-        if R is not None and bin_edges_m[0] <= R <= bin_edges_m[-1]:
-            ax.axvline(R, linestyle="--", linewidth=0.8, color="0.5")
-            ax.text(R, 1.02, label, rotation=90, va="bottom", ha="right",
-                    fontsize=8, color="0.4")
+    pooled = pool_across_seeds([a.result for a in analyses])
+    if not pooled:
+        savepath.parent.mkdir(parents=True, exist_ok=True)
+        plotting.save_figure(fig, savepath)
+        return
+
+    xs_all = [p.range_m for p in pooled]
+    x_lo   = min(xs_all)
+    x_hi   = max(xs_all)
+    if x_lo == x_hi:                # single range: pad axis so dot is visible
+        x_lo -= 50.0
+        x_hi += 50.0
 
     has_data = False
     for ss in sea_states:
-        agg = _aggregate_across_seeds(analyses, ss, bin_edges_m)
-        valid = [b for b in agg if not math.isnan(b.per)]
-        if not valid:
+        pts = [p for p in pooled
+               if p.sea_state == ss and not math.isnan(p.per)]
+        if not pts:
             continue
         has_data = True
-        xs  = [b.center_m for b in valid]
-        ys  = [b.per      for b in valid]
-        los = [b.ci_lo    for b in valid]
-        his = [b.ci_hi    for b in valid]
+        pts.sort(key=lambda p: p.range_m)
+        xs  = [p.range_m for p in pts]
+        ys  = [p.per     for p in pts]
+        los = [p.ci_lo   for p in pts]
+        his = [p.ci_hi   for p in pts]
         line, = ax.plot(xs, ys, marker="o", label=f"sea state {ss}")
         ax.fill_between(xs, los, his,
                         alpha=0.18, color=line.get_color(),
                         linewidth=0)
-    ax.set_xlabel("Range at TX (m)")
-    ax.set_ylabel("Packet error rate")
+
+    base = plt.rcParams["font.size"]
+    ax.set_xlabel("Range (m)",         fontsize=base * 1.5)
+    ax.set_ylabel("Packet error rate", fontsize=base * 1.5)
     ax.set_ylim(-0.02, 1.05)
-    ax.set_xlim(bin_edges_m[0], bin_edges_m[-1])
+    ax.set_xlim(x_lo, x_hi)
     ax.grid(True, alpha=0.3)
     if has_data:
         ax.legend(loc="best", frameon=False)
@@ -674,33 +502,31 @@ def render_per_figure(analyses:    Sequence[CellAnalysis],
 # ---------------------------------------------------------------------------
 
 class _JanusDriver:
-    """Owns the CDC consoles and the TX-loop thread for one cell at a time."""
+    """Owns the CDC consoles and the TX-loop thread for one cell."""
 
     def __init__(self,
                  modem_a_serial:        str,
                  modem_b_serial:        str,
                  *,
+                 range_m:               float,
                  sea_state:             int,
                  seed:                  int,
+                 velocity_m_s:          float,
                  cadence_s:             float,
                  first_request_delay_s: float,
-                 max_packets:           int,
-                 range_floor_m:         float,
-                 r0_m:                  float,
-                 v_m_s:                 float,
+                 packets_per_cell:      int,
                  rx_grace_s:            float,
                  cdc_factory:           Callable[..., CdcConsole] = CdcConsole.attach,
                  ready_timeout_s:       float = 15.0) -> None:
         self.modem_a_serial         = modem_a_serial
         self.modem_b_serial         = modem_b_serial
+        self.range_m                = float(range_m)
         self.sea_state              = int(sea_state)
         self.seed                   = int(seed)
+        self.velocity_m_s           = float(velocity_m_s)
         self.cadence_s              = float(cadence_s)
         self.first_request_delay_s  = float(first_request_delay_s)
-        self.max_packets            = int(max_packets)
-        self.range_floor_m          = float(range_floor_m)
-        self.r0_m                   = float(r0_m)
-        self.v_m_s                  = float(v_m_s)
+        self.packets_per_cell       = int(packets_per_cell)
         self.rx_grace_s             = float(rx_grace_s)
         self._cdc_factory           = cdc_factory
         self._ready_timeout         = ready_timeout_s
@@ -716,7 +542,7 @@ class _JanusDriver:
 
     def pre_run(self, handle: CellHandle) -> None:
         spawn_ns = time.monotonic_ns()
-        self._spawns[handle.cell_id] = spawn_ns
+        self._spawns[handle.cell_id]  = spawn_ns
         self._tx_logs[handle.cell_id] = []
         self._wait_for_ready(handle.cell_dir / "stdout.log")
         cdc_a = self._cdc_factory(
@@ -731,12 +557,30 @@ class _JanusDriver:
         )
         self._consoles[handle.cell_id] = [cdc_a, cdc_b]
 
+        # Ping each modem and require a Main Menu echo before counting the
+        # cell as ready. Distinguishes "CDC attached but TTY silent" from a
+        # genuine PER=1.0 result.
+        try:
+            for cdc in (cdc_a, cdc_b):
+                if not cdc.verify_main_menu(timeout_s=2.0):
+                    raise RuntimeError(
+                        f"{cdc.modem_id}: CDC attached but no 'Main Menu' "
+                        "echo within 2.0 s — modem unresponsive or wedged.")
+        except BaseException:
+            for cdc in (cdc_a, cdc_b):
+                try:
+                    cdc.detach()
+                except Exception:
+                    pass
+            self._consoles.pop(handle.cell_id, None)
+            raise
+
         done = threading.Event(); stop = threading.Event()
         self._done_evts[handle.cell_id] = done
         self._stop_evts[handle.cell_id] = stop
         worker = threading.Thread(
             target = self._tx_loop,
-            args   = (handle.cell_id, cdc_a, cdc_b, done, stop, spawn_ns),
+            args   = (handle.cell_id, cdc_a, cdc_b, done, stop),
             name   = f"exp3-tx-{handle.cell_id[:8]}",
             daemon = True,
         )
@@ -751,14 +595,14 @@ class _JanusDriver:
         if thread is not None:
             thread.join(timeout=5.0)
 
-        # Flush tx_log.csv and cell_meta.json before detaching CDCs (so
-        # late-arriving RX prints still land in modem_b_cdc.log).
+        # Flush tx_log.csv and cell_meta.json before detaching CDCs so
+        # late-arriving RX prints still land in modem_b_cdc.log.
         tx_log = self._tx_logs.pop(handle.cell_id, [])
         self._write_tx_log(handle.cell_dir, tx_log)
         self._write_cell_meta(handle.cell_dir,
                               spawn_ns=self._spawns.pop(handle.cell_id, 0))
 
-        # Give modem B a beat to print any in-flight decode block.
+        # Beat for modem B to print any in-flight decode block.
         if self.rx_grace_s > 0:
             time.sleep(self.rx_grace_s)
 
@@ -796,40 +640,31 @@ class _JanusDriver:
                  cdc_a:    CdcConsole,
                  cdc_b:    CdcConsole,
                  done:     threading.Event,
-                 stop:     threading.Event,
-                 spawn_ns: int) -> None:
+                 stop:     threading.Event) -> None:
         tx_log = self._tx_logs[cell_id]
         if self.first_request_delay_s > 0.0:
             stop.wait(self.first_request_delay_s)
         seq = 0
-        while seq < self.max_packets and not stop.is_set():
-            # Bail if either CDC reader thread died mid-cell. A dead modem-B
-            # reader means RX prints don't land in the log → packets look
-            # lost when they actually decoded. Continuing under that
-            # condition produces an inverted PER-vs-range curve (early
-            # packets captured, late ones invisible) and burns wall-clock
-            # on data we can't use. Better to abort the cell and let the
-            # sweep advance.
+        while seq < self.packets_per_cell and not stop.is_set():
+            # Bail if either CDC reader thread died mid-cell. A dead
+            # modem-B reader means RX prints don't reach the log and
+            # decoded packets are scored as lost; abort and let the sweep
+            # wrapper retry.
             if not cdc_a.is_reader_alive() or not cdc_b.is_reader_alive():
                 which = "A" if not cdc_a.is_reader_alive() else "B"
                 sys.stderr.write(f"[exp3] cell={cell_id[:8]} seq={seq}: "
                                  f"modem-{which} CDC reader died — aborting cell "
                                  "to avoid corrupted PER measurements.\n")
                 break
-            now_ns  = time.monotonic_ns()
-            t_s     = (now_ns - spawn_ns) / 1e9
-            rng_m   = self.r0_m + self.v_m_s * t_s
-            if rng_m <= self.range_floor_m:
-                break
             payload = f"PROBE {seq:03d}"
+            now_ns  = time.monotonic_ns()
             try:
                 cdc_a.send_janus_011_01_tx(payload)
             except Exception as exc:                            # noqa: BLE001
                 sys.stderr.write(f"[exp3] cell={cell_id[:8]} seq={seq} "
                                  f"TX failed: {exc}\n")
-                # If the TX-side TTY just went away, the next iteration's
-                # is_reader_alive() will catch it and bail; no further
-                # special-case handling needed here.
+                # If the TX-side TTY went away the next loop's
+                # is_reader_alive() check bails.
             tx_log.append(TxRequest(
                 request_id    = seq,
                 request_ts_ns = now_ns,
@@ -850,13 +685,12 @@ class _JanusDriver:
     def _write_cell_meta(self, cell_dir: Path, *, spawn_ns: int) -> None:
         meta = dict(
             simulator_spawn_ns = int(spawn_ns),
-            r0_m               = self.r0_m,
-            v_m_s              = self.v_m_s,
-            range_floor_m      = self.range_floor_m,
-            cadence_s          = self.cadence_s,
-            max_packets        = self.max_packets,
+            range_m            = self.range_m,
+            velocity_m_s       = self.velocity_m_s,
             sea_state          = self.sea_state,
             seed               = self.seed,
+            cadence_s          = self.cadence_s,
+            packets_per_cell   = self.packets_per_cell,
         )
         (cell_dir / "cell_meta.json").write_text(json.dumps(meta, indent=2))
 
@@ -865,19 +699,8 @@ class _JanusDriver:
 # Sweep wiring
 # ---------------------------------------------------------------------------
 
-def _max_packets_for_run(r0_m: float,
-                         v_m_s: float,
-                         floor_m: float,
-                         cadence_s: float) -> int:
-    """Upper bound on TXs before range hits the floor. Includes a small
-    safety margin so the TX loop's drift doesn't truncate the trailing bin."""
-    if v_m_s >= 0:
-        return 10_000        # opening or stationary — let stop_condition rule
-    travel_s = (r0_m - floor_m) / abs(v_m_s)
-    return int(math.ceil(travel_s / cadence_s)) + 2
-
-
 def _per_cell_sweep(*,
+                    range_m:               float,
                     sea_state:             int,
                     seed:                  int,
                     velocity_m_s:          float,
@@ -891,33 +714,27 @@ def _per_cell_sweep(*,
                     rx_grace_s:            float,
                     log_raw_rx:            bool,
                     retries:               int,
-                    max_packets_override:  int | None) -> None:
-    """Run one (sea_state, seed) cell as a one-cell Sweep."""
-    if max_packets_override is not None and max_packets_override > 0:
-        max_packets = int(max_packets_override)
-    else:
-        max_packets = _max_packets_for_run(
-            r0_m      = INITIAL_RANGE_M,
-            v_m_s     = velocity_m_s,
-            floor_m   = RANGE_FLOOR_M,
-            cadence_s = cadence_s,
-        )
+                    packets_per_cell:      int) -> None:
+    """Run one (range, sea_state, seed) cell as a one-cell Sweep."""
     driver = _JanusDriver(
         modem_a_serial         = modem_a_serial,
         modem_b_serial         = modem_b_serial,
+        range_m                = range_m,
         sea_state              = sea_state,
         seed                   = seed,
+        velocity_m_s           = velocity_m_s,
         cadence_s              = cadence_s,
         first_request_delay_s  = first_request_delay_s,
-        max_packets            = max_packets,
-        range_floor_m          = RANGE_FLOOR_M,
-        r0_m                   = INITIAL_RANGE_M,
-        v_m_s                  = velocity_m_s,
+        packets_per_cell       = packets_per_cell,
         rx_grace_s             = rx_grace_s,
     )
     sweep = Sweep(
         template_path     = TEMPLATE,
-        parameters        = {"sea_state": [sea_state], "seed": [seed]},
+        parameters        = {
+            "range_m":   [range_m],
+            "sea_state": [sea_state],
+            "seed":      [seed],
+        },
         extra_params      = dict(
             modem_a_serial = modem_a_serial,
             modem_b_serial = modem_b_serial,
@@ -938,24 +755,95 @@ def _per_cell_sweep(*,
     sweep.run()
 
 
-def _print_summary(analyses:    Sequence[CellAnalysis],
-                   bin_edges_m: Sequence[float]) -> None:
-    by_state: dict[int, list[CellAnalysis]] = {}
-    for a in analyses:
-        by_state.setdefault(a.sea_state, []).append(a)
+RETRY_BACKOFF_S = 3.0
+
+
+def _per_cell_sweep_with_retry(**kwargs) -> None:
+    """Run one (range, sea_state, seed) cell, retrying indefinitely until
+    the simulator produces a valid result (``_cell_is_valid`` returns
+    True). Triggers another attempt on:
+
+      * sweep.run() raising (simulator crash, USB enumeration failure,
+        missing binary, ...);
+      * cell directory created but no TX logged (init wedge);
+      * CDC console failed to attach to modem B (silent PER=1.0).
+
+    Failed attempts are renamed ``<cell>_failed_attempt<N>`` so ``analyse``
+    skips them. Intended for unattended overnight operation; Ctrl+C
+    aborts.
+    """
+    out_root:  Path = kwargs["out_root"]
+    range_m         = kwargs["range_m"]
+    sea_state       = kwargs["sea_state"]
+    seed            = kwargs["seed"]
+
+    attempt = 0
+    while True:
+        attempt += 1
+        cells_before = {p.name for p in out_root.iterdir() if p.is_dir()}
+
+        sweep_exc: BaseException | None = None
+        try:
+            _per_cell_sweep(**kwargs)
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:                    # noqa: BLE001
+            sweep_exc = exc
+            sys.stderr.write(
+                f"[exp3] R={range_m:.0f}m ss={sea_state} seed={seed} "
+                f"attempt={attempt}: sweep raised {type(exc).__name__}: {exc}\n")
+
+        new_cells = sorted(
+            out_root / name for name in
+            ({p.name for p in out_root.iterdir() if p.is_dir()} - cells_before))
+        valid_cells = [c for c in new_cells if _cell_is_valid(c)]
+
+        if sweep_exc is None and valid_cells:
+            if attempt > 1:
+                sys.stderr.write(
+                    f"[exp3] R={range_m:.0f}m ss={sea_state} seed={seed}: "
+                    f"succeeded on attempt {attempt}.\n")
+            return
+
+        for c in new_cells:
+            if c in valid_cells:
+                continue
+            quarantine = c.with_name(f"{c.name}_failed_attempt{attempt}")
+            try:
+                c.rename(quarantine)
+                sys.stderr.write(
+                    f"[exp3]   quarantined {c.name} → {quarantine.name}\n")
+            except OSError as e:
+                sys.stderr.write(
+                    f"[exp3]   could not quarantine {c.name}: {e}\n")
+
+        if sweep_exc is None:
+            sys.stderr.write(
+                f"[exp3] R={range_m:.0f}m ss={sea_state} seed={seed} "
+                f"attempt={attempt}: no usable cell produced (silent CDC "
+                "failure, wedged modem, or watchdog-killed cell) — retrying.\n")
+        time.sleep(RETRY_BACKOFF_S)
+
+
+def _print_summary(analyses: Sequence[CellAnalysis]) -> None:
+    pooled = pool_across_seeds([a.result for a in analyses])
+    by_state: dict[int, list[PooledPoint]] = {}
+    for p in pooled:
+        by_state.setdefault(p.sea_state, []).append(p)
     sys.stderr.write("[exp3] PER vs range (pooled across seeds, Wilson 95% CI):\n")
     for ss in sorted(by_state):
-        sys.stderr.write(f"  sea state {ss} ({len(by_state[ss])} cell(s)):\n")
-        for b in _aggregate_across_seeds(by_state[ss], ss, bin_edges_m):
-            if math.isnan(b.per):
-                sys.stderr.write(f"     R={b.center_m:7.1f} m   "
-                                 f"PER=  nan                 n={b.n_total:4d}\n")
+        points = sorted(by_state[ss], key=lambda p: p.range_m)
+        sys.stderr.write(f"  sea state {ss}:\n")
+        for p in points:
+            if math.isnan(p.per):
+                sys.stderr.write(f"     R={p.range_m:7.1f} m   "
+                                 f"PER=  nan                 n={p.n_total:4d}\n")
             else:
                 sys.stderr.write(
-                    f"     R={b.center_m:7.1f} m   "
-                    f"PER={b.per:5.3f} "
-                    f"[{b.ci_lo:5.3f}, {b.ci_hi:5.3f}]   "
-                    f"n={b.n_total:4d}\n")
+                    f"     R={p.range_m:7.1f} m   "
+                    f"PER={p.per:5.3f} "
+                    f"[{p.ci_lo:5.3f}, {p.ci_hi:5.3f}]   "
+                    f"n={p.n_total:4d}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -969,14 +857,29 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--binary",
                    default=str(REPO / "build" / "openCREST"),
                    help="path to the openCREST simulator binary")
+    p.add_argument("--ranges", default=",".join(f"{r:g}"
+                                                for r in DEFAULT_RANGES_M),
+                   help="comma-separated range values in metres "
+                        f"(default {','.join(f'{r:g}' for r in DEFAULT_RANGES_M)}). "
+                        "One simulator process per range.")
     p.add_argument("--sea-states", default=",".join(str(s)
                                                     for s in DEFAULT_SEA_STATES),
                    help="comma-separated Wenz sea state indices "
                         f"(default {','.join(str(s) for s in DEFAULT_SEA_STATES)})")
     p.add_argument("--seeds", type=int, default=DEFAULT_SEEDS,
-                   help=f"number of seeds per sea state (default {DEFAULT_SEEDS}). "
-                        "Each cell runs the simulator once for ~400 s of "
-                        f"approach plus ~{DEFAULT_RX_GRACE_S:.0f} s RX grace.")
+                   help=f"number of seeds per (range, sea_state) (default "
+                        f"{DEFAULT_SEEDS}).")
+    p.add_argument("--packets-per-cell", type=int,
+                   default=DEFAULT_PACKETS_PER_CELL,
+                   help=f"number of JANUS messages per cell "
+                        f"(default {DEFAULT_PACKETS_PER_CELL})")
+    p.add_argument("--velocity-m-s", type=float,
+                   default=DEFAULT_CLOSING_VELOCITY_M_S,
+                   help="closing velocity of modem A in m/s (negative = "
+                        f"approaching, default {DEFAULT_CLOSING_VELOCITY_M_S}). "
+                        "Range resets to initial_range_m on each TX so "
+                        "velocity affects only within-message Doppler / "
+                        "multipath time-evolution, not the starting range.")
     p.add_argument("--cadence-s", type=float, default=DEFAULT_CADENCE_S,
                    help="seconds between JANUS TX requests on modem A "
                         f"(firmware-limited minimum {DEFAULT_CADENCE_S})")
@@ -991,26 +894,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-cell-runtime-s", type=float,
                    default=DEFAULT_MAX_CELL_RUNTIME_S,
                    help=f"watchdog ceiling per cell (default {DEFAULT_MAX_CELL_RUNTIME_S})")
-    p.add_argument("--velocity-m-s", type=float,
-                   default=DEFAULT_CLOSING_VELOCITY_M_S,
-                   help="closing velocity of modem A in m/s (negative = "
-                        f"approaching, default {DEFAULT_CLOSING_VELOCITY_M_S}). "
-                        "Drop further (e.g. -0.5) if cargo decode is still "
-                        "fragile — slower closing keeps the symbol-window "
-                        "drift over a cargo within the firmware demod's "
-                        "fixed-grid tolerance.")
     p.add_argument("--modem-a-serial", default="OA-2-1")
     p.add_argument("--modem-b-serial", default="OA-2-2")
     p.add_argument("--retries", type=int, default=0)
     p.add_argument("--log-raw-rx", action="store_true",
                    help="enable raw-RX WAV logging (off by default; PER "
                         "analysis doesn't need it and WAVs balloon disk usage)")
-    p.add_argument("--max-packets", type=int, default=None,
-                   help="cap TX packets per cell (overrides the R(t)-derived "
-                        "default). Use for quick-check runs — e.g. "
-                        "`--sea-states 5 --seeds 1 --max-packets 5` runs one "
-                        "cell in ≈45 s so you can eyeball the CDC log and "
-                        "SNR before committing to the full sweep.")
     p.add_argument("--analysis-only", action="store_true",
                    help="don't run the sweep — only post-process artifacts "
                         "already present in --out")
@@ -1018,28 +907,31 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    sea_states = [int(s) for s in args.sea_states.split(",") if s.strip()]
+    ranges     = [float(r) for r in args.ranges.split(",") if r.strip()]
+    sea_states = [int(s)   for s in args.sea_states.split(",") if s.strip()]
     seeds      = list(range(int(args.seeds)))
 
     if not args.analysis_only:
-        for ss in sea_states:
-            for seed in seeds:
-                _per_cell_sweep(
-                    sea_state             = ss,
-                    seed                  = seed,
-                    velocity_m_s          = args.velocity_m_s,
-                    out_root              = out_dir,
-                    binary                = args.binary,
-                    modem_a_serial        = args.modem_a_serial,
-                    modem_b_serial        = args.modem_b_serial,
-                    cadence_s             = args.cadence_s,
-                    first_request_delay_s = args.first_request_delay_s,
-                    max_cell_runtime_s    = args.max_cell_runtime_s,
-                    rx_grace_s            = args.rx_grace_s,
-                    log_raw_rx            = args.log_raw_rx,
-                    retries               = args.retries,
-                    max_packets_override  = args.max_packets,
-                )
+        for range_m in ranges:
+            for ss in sea_states:
+                for seed in seeds:
+                    _per_cell_sweep_with_retry(
+                        range_m               = range_m,
+                        sea_state             = ss,
+                        seed                  = seed,
+                        velocity_m_s          = args.velocity_m_s,
+                        out_root              = out_dir,
+                        binary                = args.binary,
+                        modem_a_serial        = args.modem_a_serial,
+                        modem_b_serial        = args.modem_b_serial,
+                        cadence_s             = args.cadence_s,
+                        first_request_delay_s = args.first_request_delay_s,
+                        max_cell_runtime_s    = args.max_cell_runtime_s,
+                        rx_grace_s            = args.rx_grace_s,
+                        log_raw_rx            = args.log_raw_rx,
+                        retries               = args.retries,
+                        packets_per_cell      = args.packets_per_cell,
+                    )
 
     analyses = analyse(out_dir)
     if not analyses:
@@ -1047,12 +939,12 @@ def main(argv: list[str] | None = None) -> int:
                          f"{out_dir} — aborting\n")
         return 3
 
-    write_per_vs_range_csv(analyses, out_dir / "per_vs_range.csv")
-    write_pooled_per_csv  (analyses, out_dir / "per_vs_range_pooled.csv")
-    write_processing_table_csv(analyses, out_dir / "processing_table.csv")
-    render_per_figure(analyses, out_dir / "fig_janus_per.pdf",
-                      sea_states=sea_states)
-    _print_summary(analyses, DEFAULT_BIN_EDGES_M)
+    write_per_vs_range_csv     (analyses, out_dir / "per_vs_range.csv")
+    write_pooled_per_csv       (analyses, out_dir / "per_vs_range_pooled.csv")
+    write_processing_table_csv (analyses, out_dir / "processing_table.csv")
+    render_per_figure          (analyses, out_dir / "fig_janus_per.pdf",
+                                sea_states=sea_states)
+    _print_summary(analyses)
     return 0
 
 

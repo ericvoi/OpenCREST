@@ -69,10 +69,9 @@ TEST(PairBuffer, ReadOnEmptyBufferReturnsZero) {
 // ===========================================================================
 
 TEST(PairBuffer, FirstMessageWriteOriginIsBaseDelay) {
-    // Legacy / PID-mode policy (absolute_first_origin = false, the default):
-    // after begin_message(0) on a fresh buffer, source sample 0 (with tap
-    // delta 0) lands at receiver position base_delay. Reader sees base_delay
-    // zeros first, then the scattered data.
+    // Default policy (absolute_first_origin = false): after begin_message(0)
+    // on a fresh buffer, source sample 0 (tap delta 0) lands at receiver
+    // position base_delay. Reader sees base_delay zeros, then data.
     constexpr size_t base_delay = 16;
     PairBuffer pb(4096, base_delay);
 
@@ -104,17 +103,10 @@ TEST(PairBuffer, FirstMessageWriteOriginIsBaseDelay) {
 }
 
 TEST(PairBuffer, FirstMessageAbsoluteFirstOriginIgnoresBaseDelay) {
-    // Clock-tracker arrival-alignment policy: with absolute_first_origin =
-    // true, the buffer does NOT auto-apply base_delay on the first message.
-    // write_origin = caller-supplied gap, and the gap is expected to have
-    // already incorporated the propagation delay (via the arrival-alignment
-    // formula upstream in SourceWorker).
-    //
-    // Regression guard for the 25 m one-shot ranging bias: pre-fix,
-    // PairBuffer auto-applied base_delay regardless of the caller's intent,
-    // bypassing the arrival-alignment math and surfacing the receiver
-    // modem's pre-fill backlog as a one-shot per-direction bias on each
-    // PairBuffer's first message after simulator restart.
+    // Arrival-alignment policy: with absolute_first_origin = true the
+    // buffer does NOT auto-apply base_delay on the first message;
+    // write_origin = caller-supplied gap (which the caller has already
+    // adjusted for propagation delay).
     constexpr size_t gap = 7;
     PairBuffer pb(4096, /*base_delay_samples=*/256);
 
@@ -140,20 +132,19 @@ TEST(PairBuffer, FirstMessageAbsoluteFirstOriginIgnoresBaseDelay) {
 }
 
 TEST(PairBuffer, SubsequentMessageUnaffectedByAbsoluteFirstOriginFlag) {
-    // The absolute_first_origin flag only controls the FIRST message's
-    // policy. Once first_message_ has been consumed, subsequent messages
-    // unconditionally use prior_watermark + gap regardless of the flag.
+    // The flag only controls the first message; subsequent messages
+    // unconditionally use prior_watermark + gap.
     PairBuffer pb(4096, /*base_delay_samples=*/100);
 
-    // First message via legacy default → write_origin = 100.
+    // First message via default policy → write_origin = base_delay = 100.
     pb.begin_message(0);
     const float m1[] = {1.0f};
     pb.scatter_add(0, m1, 1);
     pb.commit_source_progress(1);
     EXPECT_EQ(pb.available_read(), 101u);  // 100 zeros + 1 sample
 
-    // Second message with absolute_first_origin=true (a no-op once
-    // first_message_ has been consumed). write_origin = prior_wm (101) + 5.
+    // Second message with absolute_first_origin=true is a no-op:
+    // write_origin = prior_wm (101) + 5.
     pb.begin_message(5, /*absolute_first_origin=*/true);
     const float m2[] = {2.0f};
     pb.scatter_add(0, m2, 1);
@@ -506,11 +497,9 @@ TEST(PairBuffer, ConcurrentNewMessageBeginsWhileReaderDrains) {
 }
 
 TEST(PairBuffer, OverlapBetweenMessagesAccumulatesViaScatter) {
-    // If msg1's tail (via commit_extra) has been published, msg2's
-    // begin_message places the new origin past that tail — the regions do
-    // not overlap. But within a single message, two scatter_adds at
-    // overlapping receiver positions accumulate. (Already covered above —
-    // this test doubles down on the inter-message non-overlap invariant.)
+    // Once msg1's tail (via commit_extra) is published, msg2's begin_message
+    // places the new origin past that tail — the message regions do not
+    // overlap.
     PairBuffer pb(4096, 0);
 
     pb.begin_message(0);
@@ -539,7 +528,7 @@ TEST(PairBuffer, OverlapBetweenMessagesAccumulatesViaScatter) {
 }
 
 // ===========================================================================
-// SPSC stress test (run under -DOPENCRIEST_TSAN=ON for race detection)
+// SPSC stress test (run under -DOPENCREST_TSAN=ON for race detection)
 // ===========================================================================
 
 TEST(PairBuffer, ConcurrentProducerConsumerStressNoDataRaces) {

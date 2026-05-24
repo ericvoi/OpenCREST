@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stub openCREST binary used by the runner smoke test.
 
-Mimics enough of the real simulator's contract that the Python ``Sweep``
-orchestrator's process management and result-collection paths can be
+Mimics enough of the simulator's contract that the Python ``Sweep``
+orchestrator's process-management and result-collection paths can be
 exercised end-to-end without USB hardware or the C++ binary.
 
 The stub:
@@ -10,15 +10,14 @@ The stub:
 * Parses ``<scenario.yaml>`` to learn ``logging.output_directory`` and
   ``name``.
 * Writes:
-    - ``<output_dir>/<name>_summary.json``  (Session D schema, plausible values)
-    - ``<output_dir>/<modem_id>_tx.wav``    (minimal RIFF header, 1 sample)
+    - ``<output_dir>/<name>_summary.json``
+    - ``<output_dir>/<modem_id>_tx.wav``      (minimal RIFF, 1 sample)
     - ``<output_dir>/<modem_id>_events.jsonl`` (a few synthetic events)
-* Sleeps until SIGTERM or until ``--max-runtime-s`` elapses (default 60 s),
-  whichever comes first. On SIGTERM it writes a clean exit code 0.
+* Sleeps until SIGTERM or ``--max-runtime-s`` (default 60 s), whichever
+  comes first; SIGTERM produces a clean exit code 0.
 
-The intent is for the stub's output to be byte-deterministic for a given
-scenario YAML, so the same scenario produces identical artifacts on
-repeat runs (the determinism check relies on this).
+Output is byte-deterministic for a given scenario YAML so the
+determinism check can fingerprint repeat runs.
 """
 from __future__ import annotations
 
@@ -42,11 +41,7 @@ def _on_signal(signum, frame):                                  # noqa: ARG001
 
 
 def _write_minimal_wav(path: Path) -> None:
-    """Write a 1-sample 12-bit-aligned mono WAV at 500 kSPS.
-
-    The content is deterministic; the determinism check fingerprints the
-    normalized PCM stream so byte-exact reproducibility is the requirement.
-    """
+    """Write a 1-sample mono WAV at 500 kSPS. Deterministic content."""
     sample_rate = 500_000
     nchannels   = 1
     sampwidth   = 2     # bytes per sample
@@ -55,7 +50,7 @@ def _write_minimal_wav(path: Path) -> None:
     data_size = len(samples)
     fmt_chunk = struct.pack(
         "<4sIHHIIHH",
-        b"fmt ", 16,        # PCM fmt chunk size
+        b"fmt ", 16,
         1,                  # PCM format
         nchannels,
         sample_rate,
@@ -96,10 +91,8 @@ def _write_summary(path: Path, scenario: dict, scenario_path: Path) -> None:
         "scenario_name":  name,
         "scenario_path":  str(scenario_path),
         "random_seed":    seed,
-        # The "started_at" / "ended_at" / "duration_s" fields are
-        # intentionally fixed strings in the stub. The determinism check
-        # for run-summary fingerprints excludes timestamp fields anyway --
-        # see lib/determinism.py.
+        # Fixed timestamp strings; the determinism fingerprint excludes
+        # them anyway.
         "started_at":     "1970-01-01T00:00:00Z",
         "ended_at":       "1970-01-01T00:00:01Z",
         "duration_s":     1.0,
@@ -159,7 +152,7 @@ def main() -> int:
     name = scenario.get("name", "run")
     modem_ids = [str(m["id"]) for m in scenario.get("modems", [])] or ["modem_a"]
 
-    # Emit artifacts up-front so even a fast SIGTERM finds them in place.
+    # Emit artifacts up-front so a fast SIGTERM still finds them in place.
     _write_summary(out_dir / f"{name}_summary.json", scenario, args.scenario_path)
     for mid in modem_ids:
         _write_minimal_wav(out_dir / f"{mid}_tx.wav")

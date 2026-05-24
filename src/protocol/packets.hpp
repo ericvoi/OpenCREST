@@ -3,8 +3,8 @@
 #include <cstddef>
 
 // Wire-format packet definitions for the modem ↔ host USB protocol.
-// ALL multi-byte fields are little-endian (matching ARM Cortex-M and x86).
-// Structs are packed so sizeof() == wire size; verified by static_assert below.
+// All multi-byte fields are little-endian. Structs are packed so sizeof()
+// matches the wire size; static_asserts below enforce this.
 //
 // This file is the contract between host software and modem firmware.
 
@@ -86,11 +86,9 @@ struct CalibrationPayload {
     uint8_t  num_input_attenuations;
     uint16_t loopback_cal_attenuation;
     uint16_t _reserved0;                        // alignment slot
-    // AFE noise floor as power spectral density at center_freq_hz, in
-    // ADC-counts per sqrt(Hz). Firmware computes this as
-    // rms_counts / sqrt(measurement_bw_hz). Reporting PSD avoids encoding the
-    // measurement bandwidth on the wire and decouples the host from
-    // decimation / modulation choices on the modem.
+    // AFE noise floor PSD at center_freq_hz, in ADC-counts/√Hz. Firmware
+    // reports as rms_counts / sqrt(measurement_bw_hz). PSD form decouples
+    // the host from the modem's measurement bandwidth / decimation choices.
     float    noise_floor_psd_counts_per_sqrt_hz;
     float    loopback_gain;
     uint32_t adc_sampling_rate;

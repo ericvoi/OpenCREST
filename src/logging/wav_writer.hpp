@@ -8,18 +8,15 @@ namespace openCREST::logging {
 
 // Minimal 16-bit mono PCM WAV writer.
 //
-// Writes the 44-byte header at construction with a zero data-size placeholder.
-// finalize() patches the header's RIFF and data chunk sizes with the actual
-// byte count. finalize() is also called automatically in the destructor.
-//
-// Thread-safety: not thread-safe. Intended to be used from one I/O thread.
+// Writes a 44-byte header at construction with a zero data-size placeholder;
+// finalize() patches the RIFF and data chunk sizes. The destructor also
+// finalizes. Not thread-safe — one writer per I/O thread.
 class WavWriter {
 public:
     // `source_bits` is the effective precision of incoming uint16_t samples
-    // (ADC = 16, DAC = 12, etc.). WAV always stores 16-bit signed PCM;
-    // samples are left-shifted to fill the top of the 16-bit field so
-    // playback amplitude matches the acoustic signal instead of bunching
-    // at one rail.
+    // (ADC = 16, DAC = 12, etc.). Samples are left-shifted into the top of
+    // the 16-bit field so playback amplitude matches the acoustic signal
+    // instead of bunching at one rail.
     WavWriter(const std::string& path, uint32_t sample_rate,
               uint8_t source_bits = 16);
     ~WavWriter();
@@ -27,7 +24,7 @@ public:
     WavWriter(const WavWriter&)            = delete;
     WavWriter& operator=(const WavWriter&) = delete;
 
-    // Write uint16_t PCM samples. Returns number of samples written.
+    // Returns number of samples written.
     size_t write(const uint16_t* samples, size_t count);
 
     // Patch the WAV header with the actual data size. Idempotent.
@@ -50,7 +47,6 @@ private:
     size_t        sample_count_ = 0;
     bool          finalized_    = false;
 
-    // Byte offsets within the WAV header that need patching
     static constexpr long RIFF_SIZE_OFFSET = 4;
     static constexpr long DATA_SIZE_OFFSET = 40;
     static constexpr size_t HEADER_BYTES   = 44;

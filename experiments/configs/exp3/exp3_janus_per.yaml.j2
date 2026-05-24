@@ -1,12 +1,21 @@
-{#- Experiment 3 — JANUS PER vs range, closing-platform sweep (paper §4.4).
+{#- Experiment 3 — JANUS PER vs range, per-cell sweep.
 
-Same geometry as Exp 1 (D=120 m, z_s=50 m, z_r=100 m, three macro paths:
-direct + surface Γ=-0.9 + bottom Γ=0.7). Modem A closes on modem B at
-v=-2 m/s, no acceleration; initial range 1000 m. Floor 200 m is enforced
-by the host driver (which SIGTERMs the run once R reaches the floor).
+Same geometry as Exp 1 (D=120 m, z_s=50 m, z_r=100 m). Five-path
+geometric scene: direct + surface + bottom + surface->bottom +
+bottom->surface. Range is fixed per cell; modem A may close on modem B
+at ``velocity_m_s`` (default -1 m/s) producing within-message Doppler.
+
+Fresh water (saltwater: false) so the SNR-vs-range curve is shaped by
+spreading loss and sea-state noise alone (no Thorp absorption), spreading
+the sync-threshold transition for a smoother PER-vs-range curve.
+
+Each cell sends N JANUS messages at one (range, velocity, sea_state,
+seed) tuple. The driver runs one simulator process per range value
+because the geometric scene resets R to ``initial_range_m`` on every TX.
 
 Variables (rendered by exp3_janus_per.py):
-  sea_state                 (int)   Wenz sea state index swept over {1, 3, 5}
+  range_m                   (float) cell range in metres
+  sea_state                 (int)   Wenz sea state index
   seed                      (int)   per-cell random_seed
   velocity_m_s              (float) closing velocity on modem A
                                     (negative = approaching; default -1.0)
@@ -17,15 +26,15 @@ Variables (rendered by exp3_janus_per.py):
 -#}
 name: exp3_janus_per
 description: >
-  Experiment 3 — JANUS 011_01 PER vs range during a 1000 m → 200 m
-  approach at v=-2 m/s, geometric scene (direct + surface + bottom),
-  Wenz sea state {{ sea_state }}, seed {{ seed }}.
+  JANUS 011_01 PER at R={{ "%.0f"|format(range_m|float) }} m,
+  v={{ "%.1f"|format((velocity_m_s | default(-1.0))|float) }} m/s, fresh water,
+  5-path geometric scene, Wenz sea state {{ sea_state }}, seed {{ seed }}.
 
 environment:
   sound_speed_m_s: 1500.0
-  saltwater: true
+  saltwater: false
   spreading_model: spherical
-  max_range_m: 1000.0
+  max_range_m: 1500.0
   max_message_duration_s: 4.0
 
 transducers:
@@ -49,13 +58,13 @@ modems:
     acceleration_radial_m_s2: 0.0
 
 channels:
-  # A → B
+  # A -> B
   - from: modem_a
     to: modem_b
-    range_m: 1000.0
-    gain_db: -17.0
+    range_m: {{ "%.3f"|format(range_m|float) }}
+    gain_db: -24.0
     mode: geometric
-    initial_range_m: 1000.0
+    initial_range_m: {{ "%.3f"|format(range_m|float) }}
     geometry:
       water_depth_m: 120.0
       source_depth_m: 50.0
@@ -66,17 +75,17 @@ channels:
       enable_direct: true
       enable_surface: true
       enable_bottom: true
-      enable_surface_bottom: false
-      enable_bottom_surface: false
-      r_min_m: 150.0
-      r_max_m: 1100.0
-  # B → A (swap depths so the receiver-depth convention stays consistent)
+      enable_surface_bottom: true
+      enable_bottom_surface: true
+      r_min_m: 100.0
+      r_max_m: 1200.0
+  # B -> A (swap depths so the receiver-depth convention stays consistent)
   - from: modem_b
     to: modem_a
-    range_m: 1000.0
-    gain_db: -17.0
+    range_m: {{ "%.3f"|format(range_m|float) }}
+    gain_db: -24.0
     mode: geometric
-    initial_range_m: 1000.0
+    initial_range_m: {{ "%.3f"|format(range_m|float) }}
     geometry:
       water_depth_m: 120.0
       source_depth_m: 100.0
@@ -87,15 +96,15 @@ channels:
       enable_direct: true
       enable_surface: true
       enable_bottom: true
-      enable_surface_bottom: false
-      enable_bottom_surface: false
-      r_min_m: 150.0
-      r_max_m: 1100.0
+      enable_surface_bottom: true
+      enable_bottom_surface: true
+      r_min_m: 100.0
+      r_max_m: 1200.0
 
 noise:
   wenz_sea_state: {{ sea_state | int }}
   min_margin_above_afe_db: 10.0
-  saltwater: true
+  saltwater: false
 
 logging:
   log_raw_tx: false

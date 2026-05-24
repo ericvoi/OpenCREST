@@ -1,9 +1,7 @@
 {#- Experiment 2 config (a): propagation delay only.
 
-Baseline reference. No multipath, no Doppler, no noise — the only thing
-the channel does is delay by 500 m / 1500 m·s⁻¹ = 333 ms one-way. Ranging
-error should be limited only by the firmware's CYCCNT resolution and the
-documented ~3–5 m HW+USB+sim bias (project_ranging_bias_first_message.md).
+Baseline reference. No multipath, no Doppler, no noise — the channel
+only delays by 500 m / 1500 m/s = 333 ms one-way.
 
 Variables (all optional, injected by Sweep runner):
   output_directory   (str)  per-cell output dir
@@ -13,8 +11,8 @@ Variables (all optional, injected by Sweep runner):
 -#}
 name: exp2_ranging_a
 description: >
-  Experiment 2 — config (a): bidirectional two-modem ranging at R=500 m
-  with propagation-delay-only channel. No multipath, Doppler, or noise.
+  Bidirectional two-modem ranging at R=500 m with a propagation-delay-only
+  channel (no multipath, Doppler, or noise).
 
 environment:
   sound_speed_m_s: 1500.0
@@ -47,11 +45,9 @@ channels:
   - from: modem_a
     to: modem_b
     range_m: 500.0
-    # With noise.disable=true the Wenz noise floor doesn't mask the chain.
-    # Physical+boost gain at R=500/fc=31.5 kHz lands at +25.77 dB on this HW
-    # (see "Channel ... → ... AFE_dB" line in simulator stdout); without trim,
-    # modem B's ADC saturates on the request packet and never responds.
-    # -20 dB drops total to ~+6 dB — safely in the linear region.
+    # Trim the chain so modem B's ADC stays in the linear region; without
+    # this the request packet saturates the receiver and no response is
+    # produced. Tune by inspecting the "Channel ... AFE_dB" stdout line.
     gain_db: -20.0
     multipath_taps:
       - delay_s: 0.000
@@ -61,11 +57,9 @@ channels:
   - from: modem_b
     to: modem_a
     range_m: 500.0
-    # With noise.disable=true the Wenz noise floor doesn't mask the chain.
-    # Physical+boost gain at R=500/fc=31.5 kHz lands at +25.77 dB on this HW
-    # (see "Channel ... → ... AFE_dB" line in simulator stdout); without trim,
-    # modem B's ADC saturates on the request packet and never responds.
-    # -20 dB drops total to ~+6 dB — safely in the linear region.
+    # Trim the chain so modem B's ADC stays in the linear region; without
+    # this the request packet saturates the receiver and no response is
+    # produced. Tune by inspecting the "Channel ... AFE_dB" stdout line.
     gain_db: -20.0
     multipath_taps:
       - delay_s: 0.000

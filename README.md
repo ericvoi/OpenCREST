@@ -13,12 +13,14 @@ required.
 
 ## Status
 
-- Single-modem loopback runs end-to-end on real hardware.
-- Two-modem mock-transport tests pass; multi-modem hardware bring-up is
-  in progress.
+- Single-modem loopback and two-modem scenarios run end-to-end on real
+  hardware, including two-way ranging on the geometric scene.
 - Physically-traceable signal levels (TVR / RVR / preamp-referenced AFE PSD)
   are wired through the entire pipeline.
-- 290+ unit/integration tests link against `openCREST_core` and run without
+- A Python experiment harness (`experiments/`) drives the simulator across
+  parameter sweeps, captures structured outputs (run-summary JSON, message
+  events, WAVs, CDC logs), and renders figures.
+- 380 unit/integration tests link against `openCREST_core` and run without
   USB hardware.
 
 ## Build
@@ -39,10 +41,11 @@ Optional CMake flags:
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `-DOPENCRIEST_BUILD_TESTS=OFF` | ON | Skip building tests |
-| `-DOPENCRIEST_ASAN=ON` | OFF | Enable AddressSanitizer |
-| `-DOPENCRIEST_TSAN=ON` | OFF | Enable ThreadSanitizer (see TSan note below) |
+| `-DOPENCREST_BUILD_TESTS=OFF` | ON | Skip building tests |
+| `-DOPENCREST_ASAN=ON` | OFF | Enable AddressSanitizer |
+| `-DOPENCREST_TSAN=ON` | OFF | Enable ThreadSanitizer (see TSan note below) |
 | `-DOPENCREST_DEBUG_TALLY=ON` | OFF | Per-tick sample-tally diagnostics in `ChannelEngine` |
+| `-DOPENCREST_USE_CLOCK_FILL_TRACKER=OFF` | ON | Use clock-extrapolation buffer-fill tracker + arrival alignment (set OFF to fall back to the PID tracker) |
 
 ### TSan on systems with high-entropy ASLR
 
@@ -86,30 +89,39 @@ scenario's `logging:` block) land in the configured `output_directory`.
   format, what each modem-side field measures, and how `loopback_gain`,
   AFE noise PSD, and the input-attenuation pads compose into the
   preamp-referenced gain chain.
+- [`docs/metrics_export.md`](docs/metrics_export.md) — per-run JSON / JSONL
+  artifacts produced by the simulator for downstream analysis.
+- [`docs/hardware_compatibility.md`](docs/hardware_compatibility.md) —
+  reference modem, interface requirements, and what's needed to add a
+  new transport (USB FS, Ethernet, FPGA bridge, …).
 - [`spec.md`](spec.md) — system-level specification.
-- [`architecture.md`](architecture.md) — implementation architecture
-  (modules, threading, hot-path constraints).
-- [`firmware_spec.md`](firmware_spec.md) — modem firmware contract.
 - [`scenarios/`](scenarios/) — example YAML scenarios (single-modem
   loopback, multi-tap multipath, two-modem, Doppler).
+- [`experiments/README.md`](experiments/README.md) — Python harness for
+  parameter sweeps, CDC console capture, and figure rendering.
 
 ## Module Layout
 
 ```
 src/
-├── core/         Compile-time constants, types, SPSC ring buffer
-├── dsp/          Farrow resampler, Hilbert, multipath delay-line, path loss,
-│                  Wenz noise, calibration math, transducer response
+├── core/         Compile-time constants, types, SPSC ring buffer,
+│                  TX-start estimator
+├── dsp/          Farrow resampler (bulk + per-tap), Hilbert, multipath
+│                  delay-line, source delay-line, path loss, Wenz noise,
+│                  noise PSD, physical gain, calibration math, transducer
+│                  response
 ├── channel/      PairBuffer, Channel pipeline, SourceWorker, ReceiverMix,
-│                  ChannelEngine
+│                  ChannelEngine, geometric scene (range-dependent taps)
 ├── protocol/     Wire formats + codec for data and control packets
 ├── transport/    IModemTransport interface; UsbTransport (libusb) and
 │                  MockTransport (testing)
 ├── modem/        Modem state, calibration handshake, registry/discovery
-├── io/           Per-modem I/O thread, buffer pacer
+├── io/           Per-modem I/O thread, buffer pacer, clock-extrapolation
+│                  and PID fill trackers
 ├── config/       Scenario YAML loader + validation
 ├── logging/      WAV writer + per-stream logger
-└── simulator/    Top-level coordinator, metrics
+└── simulator/    Top-level coordinator, metrics, processing-time stats,
+                   message-event log, run summary
 ```
 
 `openCREST_core` (the library that all tests link against) has no `libusb`
@@ -118,4 +130,4 @@ both together for the executable.
 
 ## License
 
-See `LICENSE`
+MIT License — see [`LICENSE`](LICENSE).

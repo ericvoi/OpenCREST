@@ -287,12 +287,10 @@ TEST(BufferPacer, CatchUpAllowsSmallBurstAfterStall) {
     auto t = steady::now();
     pacer.update_fill(BUFFER_CAP / 2, t);
 
-    // Consume the first scheduled send at t. next_send_time is now t+period.
     pacer.should_send(t);
 
-    // Simulate a 3-period stall (e.g. a libusb poll that blocked the I/O
-    // loop for ~3 send slots). On resume, the pacer should allow us to send
-    // back-to-back to absorb the backlog rather than forfeiting slots.
+    // After a 3-period stall, allow back-to-back sends to absorb the
+    // backlog rather than forfeiting slots.
     const auto period = std::chrono::microseconds(
         static_cast<long>(1e6f / NOMINAL_RATE));
     auto t1 = t + period * 3;

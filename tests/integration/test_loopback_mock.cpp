@@ -15,7 +15,7 @@
 
 using namespace openCREST;
 
-// Wires up a single-modem loopback through the new Phase 2 pipeline:
+// Wires up a single-modem loopback:
 //   MockTransport ↔ ModemIO ↔ tx_ring/rx_ring ↔ ChannelEngine workers
 class LoopbackMockFixture {
 public:
@@ -129,10 +129,9 @@ TEST(LoopbackMockPhase2, FullTxSettlingRxCycleProducesRxPackets) {
 
     std::thread io_thread([&] { fix.io_->run(); });
 
-    // Run for a fixed window. We deliberately do NOT poll
-    // mock_raw_->received_rx_packets() here — that's a vector mutated by
-    // the I/O thread via send_data, and reading it concurrently is a real
-    // data race (TSan-flagged). Stop the I/O thread first, then read.
+    // Run for a fixed window. Do NOT poll mock_raw_->received_rx_packets()
+    // here — it's mutated by the I/O thread via send_data and reading it
+    // concurrently is a TSan-flagged data race. Stop the I/O thread first.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     fix.io_->stop();
@@ -140,5 +139,5 @@ TEST(LoopbackMockPhase2, FullTxSettlingRxCycleProducesRxPackets) {
     fix.engine_->stop();
 
     EXPECT_GT(fix.mock_raw_->received_rx_packets().size(), 0u)
-        << "MockTransport received no RX packets through the full Phase 2 pipeline";
+        << "MockTransport received no RX packets through the pipeline";
 }

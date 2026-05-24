@@ -36,12 +36,12 @@ public:
     Simulator(const Simulator&)            = delete;
     Simulator& operator=(const Simulator&) = delete;
 
-    // Phase 1: load scenario, connect modems, calibrate, build engine.
+    // Load scenario, connect modems, calibrate, build engine.
     // Returns false on any fatal error (message already logged).
     bool initialize();
 
-    // Phase 2: enter HIL mode, start threads, run metrics loop.
-    // Blocks until stop() or any I/O thread signals a fatal error.
+    // Enter HIL mode, start threads, run the metrics loop. Blocks until
+    // stop() or any I/O thread signals a fatal error.
     void run();
 
     // Signal a clean shutdown from any thread.
@@ -50,48 +50,42 @@ public:
     const Metrics& metrics() const { return metrics_; }
 
 private:
-    // Initialization steps (each returns false on failure)
     bool load_scenario();
     bool discover_modems();
     bool calibrate_modems();
     bool build_channel_engine();
 
-    // Thread management
     void start_io_threads();
     void join_all_threads();
 
-    // -----------------------------------------------------------------------
     std::string       scenario_path_;
     ScenarioConfig    scenario_{};
 
     ModemRegistry     registry_;
     std::vector<std::unique_ptr<Modem>> modems_;
 
-    // Ring buffers (one pair per modem): owned here, referenced by IO + engine
+    // One pair per modem; owned here, referenced by IO + engine.
     struct ModemBuffers {
         SPSCRingBuffer<uint16_t> tx_ring{TX_RING_CAPACITY};
         SPSCRingBuffer<uint16_t> rx_ring{RX_RING_CAPACITY};
     };
     std::vector<ModemBuffers> buffers_;
 
-    // ModemRuntimeStates are inside Modem; we hold pointers here for the engine
     std::unique_ptr<ChannelEngine> engine_;
     std::vector<std::unique_ptr<ModemIO>> io_workers_;
     std::unique_ptr<logging::StreamLogger> logger_;
     Metrics metrics_;
 
-    // Session D observability — owned here so lifetime tracks the
-    // Simulator; pointers handed to SourceWorkers via ChannelEngine.
+    // Observability sinks; pointers handed to SourceWorkers via ChannelEngine.
     std::unique_ptr<ProcessingTimeStats>          processing_time_stats_;
     std::vector<std::unique_ptr<MessageEventLog>> message_event_logs_;
     std::chrono::system_clock::time_point         run_started_at_{};
     std::chrono::steady_clock::time_point         run_started_steady_{};
 
-    // Helpers split out of run() so they can be unit-tested in isolation.
     void install_observability();   // open log files, wire engine pointers
     void emit_run_summary();        // gather snapshot, write JSON
 
-    // Threads (SourceWorker threads live inside ChannelEngine)
+    // SourceWorker threads live inside ChannelEngine.
     std::vector<std::thread> io_threads_;
 
     std::atomic<bool> running_{false};
