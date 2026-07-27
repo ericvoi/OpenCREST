@@ -21,7 +21,36 @@ struct TransducerSpec {
 //   Static    — scenario-supplied flat multipath tap list.
 //   Geometric — method-of-images scene; taps recomputed each block from R(t),
 //               yielding closing-range Doppler from shrinking tap delays.
-enum class ChannelMode { Static, Geometric };
+//   Replay    — measured tap trajectories from an .octt file; Doppler
+//               emerges from the recorded time-varying delays.
+enum class ChannelMode { Static, Geometric, Replay };
+
+// Replay-mode parameters. The record does not advance between messages:
+// each message maps intra-message time onto the recording starting at a
+// per-message offset.
+struct ReplayConfig {
+    // Absolute path to the .octt trajectory file (loader resolves the YAML
+    // value relative to the scenario file's directory).
+    std::string trajectory_path;
+
+    // Record time at which the first message starts. In fixed mode
+    // (advance_per_message = false) every message restarts here.
+    double      offset_s              = 0.0;
+
+    // Advancing mode: each message continues where the previous one (and
+    // its multipath-tail drain) ended.
+    bool        advance_per_message   = false;
+
+    // Advancing mode: when the remaining record is shorter than this,
+    // wrap to record time 0 instead of starting near the end. 0 = never
+    // wrap (a message running past the end is truncated with a warning).
+    double      wrap_if_remaining_lt_s = 0.0;
+
+    // Populated by ScenarioLoader from the .octt header (not parsed from
+    // YAML) so ChannelEngine sizing needs no file I/O.
+    double      max_delay_s           = 0.0;
+    uint32_t    tap_count             = 0;
+};
 
 struct GeometricSceneConfig {
     float water_depth_m         = 0.0f;
@@ -41,6 +70,12 @@ struct GeometricSceneConfig {
     bool  enable_bottom         = true;
     bool  enable_surface_bottom = false;
     bool  enable_bottom_surface = false;
+
+    // Maximum reflection order (bounces) in the image expansion. 2 (default)
+    // gives the classic five paths above; 3 and 4 add the order-3
+    // (surface-bottom-surface, bottom-surface-bottom) and order-4 paths,
+    // deepening the reverberant tail. Clamped to [0, kMaxImageOrder].
+    int   max_bounces           = 2;
 
     // Range envelope used to size the PairBuffer. When <= 0, the loader
     // fills them with R_0/2 and R_0*2. R(t) must stay within these bounds.
@@ -125,8 +160,11 @@ struct ChannelConfig {
     //   Static    — use multipath_taps directly (default).
     //   Geometric — compute taps from `geometry` each block; multipath_taps
     //               must be empty.
+    //   Replay    — render tap trajectories from `replay`; multipath_taps
+    //               and geometry must be empty.
     ChannelMode            mode             = ChannelMode::Static;
     GeometricSceneConfig   geometry;        // populated when mode == Geometric
+    ReplayConfig           replay;          // populated when mode == Replay
 
     // R_0 for geometric mode. Negative = fall back to range_m; otherwise
     // overrides the snapshot range at on_message_start so the scene moves

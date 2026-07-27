@@ -490,11 +490,7 @@ def render_violin(analyses: list[ConfigAnalysis],
         x_label = "Channel configuration",
         y_label = "Range error (m)",
     )
-    ax = fig.axes[0]
-    base = plt.rcParams["font.size"]
-    ax.xaxis.label.set_fontsize(base * 1.5)
-    ax.yaxis.label.set_fontsize(base * 1.5)
-    ax.tick_params(axis="both", labelsize=base * 1.5)
+    # Element sizing (labels/ticks) comes from plotting.apply_paper_style().
     plotting.save_figure(fig, savepath)
 
 

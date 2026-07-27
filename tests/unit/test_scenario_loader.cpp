@@ -1194,6 +1194,53 @@ channels:
     EXPECT_THROW(ScenarioLoader::load_from_string(yaml), ScenarioLoadError);
 }
 
+TEST(ScenarioLoader, GeometricChannelAcceptsMaxBounces) {
+    const char* yaml = R"yaml(
+name: geom_bounces
+transducers:
+  _T: {tvr_db: 0.0, rvr_db: 0.0}
+modems:
+  - id: a
+    usb_serial: SA
+    transducer_id: _T
+channels:
+  - from: a
+    to: a
+    range_m: 400.0
+    mode: geometric
+    geometry:
+      water_depth_m: 100.0
+      source_depth_m: 30.0
+      receiver_depth_m: 30.0
+      max_bounces: 4
+)yaml";
+    const auto cfg = ScenarioLoader::load_from_string(yaml);
+    EXPECT_EQ(cfg.channels[0].geometry.max_bounces, 4);
+}
+
+TEST(ScenarioLoader, GeometricChannelRejectsOutOfRangeMaxBounces) {
+    const char* yaml = R"yaml(
+name: geom_bounces_bad
+transducers:
+  _T: {tvr_db: 0.0, rvr_db: 0.0}
+modems:
+  - id: a
+    usb_serial: SA
+    transducer_id: _T
+channels:
+  - from: a
+    to: a
+    range_m: 400.0
+    mode: geometric
+    geometry:
+      water_depth_m: 100.0
+      source_depth_m: 30.0
+      receiver_depth_m: 30.0
+      max_bounces: 5
+)yaml";
+    EXPECT_THROW(ScenarioLoader::load_from_string(yaml), ScenarioLoadError);
+}
+
 TEST(ScenarioLoader, GeometricChannelWithMultipathTapsThrows) {
     const char* yaml = R"yaml(
 name: geom_collision
@@ -1284,4 +1331,159 @@ channels:
       r_max_m: 2000.0
 )yaml";
     EXPECT_THROW(ScenarioLoader::load_from_string(yaml), ScenarioLoadError);
+}
+
+// ---------------------------------------------------------------------------
+// Replay mode
+// ---------------------------------------------------------------------------
+
+#include <fstream>
+#include "test_helpers/octt_writer.hpp"
+
+namespace {
+
+// Two-tap .octt (max delay 10 ms) written into gtest's temp dir.
+std::string write_replay_fixture(const std::string& name) {
+    const std::string path = testing::TempDir() + name;
+    std::vector<double> delays;
+    std::vector<float>  amps;
+    for (int f = 0; f < 3; ++f) {
+        delays.insert(delays.end(), {0.001, 0.010});
+        amps.insert(amps.end(),   {1.0f, 0.5f});
+    }
+    test_helpers::write_octt_file(path, 2, 3, 0.050, 35e3, delays, amps);
+    return path;
+}
+
+std::string replay_yaml(const std::string& channel_extras,
+                        const std::string& modem_extras = "") {
+    return std::string(R"yaml(
+name: replay_test
+transducers:
+  _T: {tvr_db: 0.0, rvr_db: 0.0}
+modems:
+  - id: a
+    usb_serial: SA
+    transducer_id: _T
+)yaml") + modem_extras + R"yaml(
+  - id: b
+    usb_serial: SB
+    transducer_id: _T
+channels:
+  - from: a
+    to: b
+    range_m: 800.0
+    mode: replay
+)yaml" + channel_extras;
+}
+
+} // namespace
+
+TEST(ScenarioLoader, LoadReplayChannel) {
+    const auto octt = write_replay_fixture("loader_ok.octt");
+    const auto cfg = ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n"
+        "      trajectory_file: \"" + octt + "\"\n"
+        "      offset_s: 1.5\n"
+        "      advance_per_message: true\n"
+        "      wrap_if_remaining_lt_s: 5.0\n"));
+    ASSERT_EQ(cfg.channels.size(), 1u);
+    const auto& cc = cfg.channels[0];
+    EXPECT_EQ(cc.mode, ChannelMode::Replay);
+    EXPECT_EQ(cc.replay.trajectory_path, octt);
+    EXPECT_DOUBLE_EQ(cc.replay.offset_s, 1.5);
+    EXPECT_TRUE(cc.replay.advance_per_message);
+    EXPECT_DOUBLE_EQ(cc.replay.wrap_if_remaining_lt_s, 5.0);
+    // Sizing fields lifted from the file header.
+    EXPECT_DOUBLE_EQ(cc.replay.max_delay_s, 0.010);
+    EXPECT_EQ(cc.replay.tap_count, 2u);
+    EXPECT_TRUE(cc.multipath_taps.empty());
+}
+
+TEST(ScenarioLoader, ReplayDefaultsAreFixedModeFromRecordStart) {
+    const auto octt = write_replay_fixture("loader_defaults.octt");
+    const auto cfg = ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n"
+        "      trajectory_file: \"" + octt + "\"\n"));
+    const auto& r = cfg.channels[0].replay;
+    EXPECT_DOUBLE_EQ(r.offset_s, 0.0);
+    EXPECT_FALSE(r.advance_per_message);
+    EXPECT_DOUBLE_EQ(r.wrap_if_remaining_lt_s, 0.0);
+}
+
+TEST(ScenarioLoader, ReplayMissingBlockThrows) {
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml("")),
+                 ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayMissingTrajectoryFileThrows) {
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n      offset_s: 0.0\n")), ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayNonexistentTrajectoryThrows) {
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n      trajectory_file: \"/nonexistent/x.octt\"\n")),
+        ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayCorruptTrajectoryThrows) {
+    const std::string bad = testing::TempDir() + "corrupt.octt";
+    std::ofstream(bad, std::ios::binary) << "not an octt file";
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n      trajectory_file: \"" + bad + "\"\n")),
+        ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayWithMultipathTapsThrows) {
+    const auto octt = write_replay_fixture("loader_taps.octt");
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n      trajectory_file: \"" + octt + "\"\n"
+        "    multipath_taps:\n      - delay_s: 0.0\n")),
+        ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayWithGeometryThrows) {
+    const auto octt = write_replay_fixture("loader_geom.octt");
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n      trajectory_file: \"" + octt + "\"\n"
+        "    geometry:\n      water_depth_m: 100.0\n")),
+        ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayWithInitialRangeThrows) {
+    const auto octt = write_replay_fixture("loader_ir.octt");
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n      trajectory_file: \"" + octt + "\"\n"
+        "    initial_range_m: 500.0\n")),
+        ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayNegativeOffsetThrows) {
+    const auto octt = write_replay_fixture("loader_neg.octt");
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n"
+        "      trajectory_file: \"" + octt + "\"\n"
+        "      offset_s: -0.1\n")),
+        ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplaySourceModemMotionThrows) {
+    const auto octt = write_replay_fixture("loader_motion.octt");
+    EXPECT_THROW(ScenarioLoader::load_from_string(replay_yaml(
+        "    replay:\n      trajectory_file: \"" + octt + "\"\n",
+        "    velocity_radial_m_s: -2.0\n")),
+        ScenarioLoadError);
+}
+
+TEST(ScenarioLoader, ReplayRelativePathResolvesAgainstScenarioDir) {
+    // Scenario file and trajectory sit in the same temp directory; the
+    // YAML references the trajectory by bare filename.
+    const auto octt = write_replay_fixture("loader_rel.octt");
+    const std::string yaml_path = testing::TempDir() + "loader_rel.yaml";
+    std::ofstream(yaml_path) << replay_yaml(
+        "    replay:\n      trajectory_file: \"loader_rel.octt\"\n");
+
+    const auto cfg = ScenarioLoader::load(yaml_path);
+    EXPECT_EQ(cfg.channels[0].replay.trajectory_path, octt);
 }

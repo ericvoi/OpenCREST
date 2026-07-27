@@ -1,0 +1,98 @@
+{#- Geometric twin of a Watermark dataset.
+
+A geometric channel configured from the dataset's documented deployment
+(range, water depth; assumed depths/bottom — see lib/watermark_twins.py)
+so replay and geometric runs describe the same ocean. Parameters come
+from watermark_twins.twin_params().
+
+Variables:
+  dataset             (str)   dataset name, e.g. NOF1 (labeling only)
+  seed                (int)   random_seed for this cell
+  range_m             (float) published source-receiver range
+  water_depth_m       (float) published water depth
+  source_depth_m      (float) assumed source depth
+  receiver_depth_m    (float) assumed receiver depth
+  gamma_bottom        (float) assumed bottom reflection coefficient
+  velocity_radial_m_s (float) tow-motion radial velocity (0 = fixed-fixed)
+  r_min_m, r_max_m    (float) R envelope bracketing the motion
+  channel_gain_db     (float) swept channel gain (the SNR axis)
+  sea_state           (int)   Wenz sea state, fixed across the sweep (default 3)
+  max_bounces         (int)   image-method reflection order (2=5 rays, 4=9; default 2)
+  max_message_duration_s (float) EVAL message ceiling (default 5.0)
+  modem_a_serial      (str)   USB serial for modem A
+  modem_b_serial      (str)   USB serial for modem B
+  output_directory    (str)   per-cell output dir (injected by Sweep runner)
+-#}
+name: twin_{{ dataset }}_seed{{ seed|int }}
+description: >
+  Geometric twin of the {{ dataset }} Watermark dataset:
+  R={{ "%.0f"|format(range_m|float) }} m,
+  depth={{ "%.0f"|format(water_depth_m|float) }} m,
+  v={{ "%.2f"|format(velocity_radial_m_s|float) }} m/s.
+  Depths and bottom gamma are assumptions — see lib/watermark_twins.py.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: {{ "%.1f"|format(max_message_duration_s|default(5.0)|float) }}
+
+transducers:
+  T-001:
+    tvr_db: {{ "%.3f"|format(tvr_a_db|default(172.0)|float) }}
+    rvr_db: {{ "%.3f"|format(rvr_a_db|default(-200.0)|float) }}
+  T-002:
+    tvr_db: {{ "%.3f"|format(tvr_b_db|default(170.0)|float) }}
+    rvr_db: {{ "%.3f"|format(rvr_b_db|default(-200.0)|float) }}
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial }}"
+    transducer_id: "T-001"
+    velocity_radial_m_s: {{ "%.3f"|format(velocity_radial_m_s|float) }}
+    acceleration_radial_m_s2: 0.0
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial }}"
+    transducer_id: "T-002"
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: {{ "%.3f"|format(range_m|float) }}
+    gain_db: {{ "%.3f"|format(channel_gain_db|float) }}
+    mode: geometric
+    initial_range_m: {{ "%.3f"|format(range_m|float) }}
+    geometry:
+      water_depth_m: {{ "%.3f"|format(water_depth_m|float) }}
+      source_depth_m: {{ "%.3f"|format(source_depth_m|float) }}
+      receiver_depth_m: {{ "%.3f"|format(receiver_depth_m|float) }}
+      gamma_surface: -0.9
+      gamma_bottom: {{ "%.3f"|format(gamma_bottom|float) }}
+      spreading_exponent_k: 1.5
+      enable_direct: true
+      enable_surface: true
+      enable_bottom: true
+      enable_surface_bottom: true
+      enable_bottom_surface: true
+      max_bounces: {{ max_bounces | default(2) | int }}
+      r_min_m: {{ "%.3f"|format(r_min_m|float) }}
+      r_max_m: {{ "%.3f"|format(r_max_m|float) }}
+
+{# Same noise model as the replay arm (exp5) so gain_db is the SNR axis
+   for both, up to a per-arm calibration offset (the geometric arm carries
+   range-dependent spreading loss the peak-normalised replay does not). #}
+noise:
+  wenz_sea_state: {{ sea_state | default(3) | int }}
+  min_margin_above_afe_db: 10.0
+  saltwater: false
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: false
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: {{ seed|int }}

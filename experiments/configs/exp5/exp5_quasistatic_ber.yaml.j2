@@ -1,0 +1,86 @@
+{#- Experiment 5 — quasi-static BER vs SNR.
+
+Single A->B replay channel driven by one quasi-static snapshot (.octt
+with linear per-tap delay ramps). Modem A fires PRBS evaluation
+messages; modem B scores the cargo and prints Uncoded/Coded BER counts
+on its CDC console. Wenz noise stays fixed while gain_db sweeps the
+signal level, so gain_db is the SNR axis up to a per-setup calibration
+offset.
+
+offset_s equals the trajectory frame interval so every message plays
+inside interior Catmull-Rom segments, where linear delay ramps (and so
+per-tap Doppler) are reproduced exactly. advance_per_message is false:
+every message sees the same frozen channel.
+
+Variables:
+  snapshot          (int)   snapshot index within the ensemble (labeling)
+  gain_tag          (str)   filesystem-safe gain label, e.g. m52p5
+  seed              (int)   random_seed for this cell
+  gain_db           (float) swept channel gain
+  trajectory_file   (str)   absolute path to the snapshot .octt
+  record_dt_s       (float) trajectory frame interval (default 1.0)
+  sea_state         (int)   Wenz sea state, fixed across the sweep (default 3)
+  range_m           (float) bulk propagation range (default 300)
+  max_message_duration_s (float) EVAL message ceiling (default 5.0)
+  modem_a_serial    (str)   USB serial for modem A (default OA-2-1)
+  modem_b_serial    (str)   USB serial for modem B (default OA-2-2)
+  tvr_a_db, rvr_a_db(float) modem A transducer params (defaults 172, -200)
+  tvr_b_db, rvr_b_db(float) modem B transducer params (defaults 170, -200)
+  output_directory  (str)   per-cell output dir (injected by Sweep runner)
+-#}
+name: exp5_snap{{ snapshot|int }}_{{ gain_tag }}_seed{{ seed|int }}
+description: >
+  Quasi-static BER cell: snapshot {{ snapshot|int }},
+  gain {{ "%.1f"|format(gain_db|float) }} dB, seed {{ seed|int }}.
+  PRBS evaluation messages from modem A through a frozen replay channel;
+  modem B reports cargo BER.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: {{ "%.1f"|format(max_message_duration_s|default(5.0)|float) }}
+
+transducers:
+  T-001:
+    tvr_db: {{ "%.3f"|format(tvr_a_db|default(172.0)|float) }}
+    rvr_db: {{ "%.3f"|format(rvr_a_db|default(-200.0)|float) }}
+  T-002:
+    tvr_db: {{ "%.3f"|format(tvr_b_db|default(170.0)|float) }}
+    rvr_db: {{ "%.3f"|format(rvr_b_db|default(-200.0)|float) }}
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial | default('OA-2-1') }}"
+    transducer_id: "T-001"
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial | default('OA-2-2') }}"
+    transducer_id: "T-002"
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: {{ "%.3f"|format(range_m|default(300.0)|float) }}
+    gain_db: {{ "%.3f"|format(gain_db|float) }}
+    mode: replay
+    replay:
+      trajectory_file: "{{ trajectory_file }}"
+      offset_s: {{ "%.3f"|format(record_dt_s|default(1.0)|float) }}
+      advance_per_message: false
+      wrap_if_remaining_lt_s: 0.0
+
+noise:
+  wenz_sea_state: {{ sea_state | default(3) | int }}
+  min_margin_above_afe_db: 10.0
+  saltwater: false
+
+logging:
+  log_raw_tx: false
+  log_raw_rx: false
+  log_processed: false
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: {{ seed|int }}

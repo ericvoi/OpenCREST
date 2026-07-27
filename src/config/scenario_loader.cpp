@@ -1,8 +1,10 @@
 #include "config/scenario_loader.hpp"
 #include "core/constants.hpp"
+#include "core/tap_trajectory.hpp"
 #include <yaml-cpp/yaml.h>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <random>
 #include <set>
 #include <sstream>
@@ -30,8 +32,11 @@ float draw_truncated_normal_ppm(float tolerance, std::mt19937_64& rng) {
     return 0.0f;
 }
 
-// Parse and validate the top-level YAML structure.
-ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
+// Parse and validate the top-level YAML structure. `base_dir` is the
+// directory of the scenario file, used to resolve relative data-file paths
+// (empty for in-memory YAML: paths resolve against the working directory).
+ScenarioConfig parse(const YAML::Node& root, const std::string& source,
+                     const std::string& base_dir) {
     if (!root.IsMap()) {
         throw ScenarioLoadError(source + ": root node must be a YAML mapping");
     }
@@ -260,10 +265,11 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
             const std::string mode_str = c["mode"].as<std::string>();
             if      (mode_str == "static")    cc.mode = ChannelMode::Static;
             else if (mode_str == "geometric") cc.mode = ChannelMode::Geometric;
+            else if (mode_str == "replay")    cc.mode = ChannelMode::Replay;
             else {
                 throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
-                    "] 'mode' must be 'static' or 'geometric' (got '" +
-                    mode_str + "')");
+                    "] 'mode' must be 'static', 'geometric', or 'replay' "
+                    "(got '" + mode_str + "')");
             }
         }
 
@@ -290,8 +296,15 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
             if (g["enable_bottom"])         gs.enable_bottom         = g["enable_bottom"].as<bool>();
             if (g["enable_surface_bottom"]) gs.enable_surface_bottom = g["enable_surface_bottom"].as<bool>();
             if (g["enable_bottom_surface"]) gs.enable_bottom_surface = g["enable_bottom_surface"].as<bool>();
+            if (g["max_bounces"])           gs.max_bounces           = g["max_bounces"].as<int>();
             if (g["r_min_m"])               gs.r_min_m               = g["r_min_m"].as<float>();
             if (g["r_max_m"])               gs.r_max_m               = g["r_max_m"].as<float>();
+
+            if (gs.max_bounces < 0 || gs.max_bounces > kMaxImageOrder) {
+                throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                    "] geometry.max_bounces must be in [0, " +
+                    std::to_string(kMaxImageOrder) + "]");
+            }
 
             if (gs.water_depth_m <= 0.0f) {
                 throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
@@ -325,6 +338,70 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
             cc.geometry = gs;
         }
 
+        if (cc.mode == ChannelMode::Replay) {
+            if (!c["replay"]) {
+                throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                    "] mode: replay requires a 'replay:' block");
+            }
+            if (c["multipath_taps"]) {
+                throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                    "] 'multipath_taps' is not allowed with mode: replay — "
+                    "taps come from the trajectory file");
+            }
+            if (c["geometry"]) {
+                throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                    "] 'geometry' is not allowed with mode: replay");
+            }
+            if (c["initial_range_m"]) {
+                throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                    "] 'initial_range_m' is not allowed with mode: replay — "
+                    "use range_m / propagation_delay_s for the bulk delay");
+            }
+
+            const YAML::Node& r = c["replay"];
+            if (!r["trajectory_file"]) {
+                throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                    "] replay block missing required field 'trajectory_file'");
+            }
+            std::filesystem::path traj(r["trajectory_file"].as<std::string>());
+            if (traj.is_relative() && !base_dir.empty()) {
+                traj = std::filesystem::path(base_dir) / traj;
+            }
+            cc.replay.trajectory_path = traj.string();
+
+            if (r["offset_s"]) {
+                cc.replay.offset_s = r["offset_s"].as<double>();
+                if (cc.replay.offset_s < 0.0) {
+                    throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                        "] replay.offset_s must be >= 0");
+                }
+            }
+            if (r["advance_per_message"]) {
+                cc.replay.advance_per_message =
+                    r["advance_per_message"].as<bool>();
+            }
+            if (r["wrap_if_remaining_lt_s"]) {
+                cc.replay.wrap_if_remaining_lt_s =
+                    r["wrap_if_remaining_lt_s"].as<double>();
+                if (cc.replay.wrap_if_remaining_lt_s < 0.0) {
+                    throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                        "] replay.wrap_if_remaining_lt_s must be >= 0");
+                }
+            }
+
+            // Validate the file header and lift the sizing fields the
+            // ChannelEngine needs, so PairBuffer sizing does no file I/O.
+            try {
+                const auto hdr =
+                    TapTrajectory::peek_header(cc.replay.trajectory_path);
+                cc.replay.max_delay_s = hdr.max_delay_s;
+                cc.replay.tap_count   = hdr.tap_count;
+            } catch (const TapTrajectoryError& e) {
+                throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                    "] replay trajectory: " + e.what());
+            }
+        }
+
         // Inherit environment settings
         cc.spreading_factor = cfg.environment.spreading_factor;
         cc.saltwater        = cfg.environment.saltwater;
@@ -343,15 +420,24 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source) {
             cc.velocity_radial_m_s      = src->velocity_radial_m_s;
             cc.acceleration_radial_m_s2 = src->acceleration_radial_m_s2;
         }
+        if (cc.mode == ChannelMode::Replay
+            && (cc.velocity_radial_m_s != 0.0f
+                || cc.acceleration_radial_m_s2 != 0.0f)) {
+            throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
+                "] source modem '" + cc.from_modem + "' declares radial "
+                "velocity/acceleration, but motion in a replay channel comes "
+                "from the recorded trajectory — remove the modem motion "
+                "fields or use a geometric channel");
+        }
         if (src && rx) {
             cc.clock_offset_ppm = src->actual_clock_offset_ppm
                                 - rx->actual_clock_offset_ppm;
         }
 
-        // Multipath taps (static mode only; geometric mode computes taps
-        // from its scene at message start).
-        if (cc.mode == ChannelMode::Geometric) {
-            // Channel populates taps_ from the scene at message start.
+        // Multipath taps (static mode only; geometric and replay modes get
+        // taps from their tap source each block).
+        if (cc.mode != ChannelMode::Static) {
+            // Tap source supplies the taps.
         } else if (const YAML::Node& taps_node = c["multipath_taps"]) {
             if (!taps_node.IsSequence()) {
                 throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
@@ -463,7 +549,8 @@ ScenarioConfig ScenarioLoader::load(const std::string& filepath) {
     } catch (const YAML::Exception& e) {
         throw ScenarioLoadError(filepath + ": YAML parse error: " + e.what());
     }
-    return parse(root, filepath);
+    return parse(root, filepath,
+                 std::filesystem::path(filepath).parent_path().string());
 }
 
 ScenarioConfig ScenarioLoader::load_from_string(const std::string& yaml_text) {
@@ -473,7 +560,7 @@ ScenarioConfig ScenarioLoader::load_from_string(const std::string& yaml_text) {
     } catch (const YAML::Exception& e) {
         throw ScenarioLoadError(std::string("<string>: YAML parse error: ") + e.what());
     }
-    return parse(root, "<string>");
+    return parse(root, "<string>", "");
 }
 
 } // namespace openCREST

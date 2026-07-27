@@ -1,0 +1,68 @@
+name: replay_example
+description: >
+  Channel replay demo: a two-modem link whose multipath structure comes
+  from a recorded tap-trajectory file instead of an analytic model. The
+  bundled example_three_path.octt is synthetic (direct path with a slow
+  closing-range drift, an oscillating surface bounce, and a bottom bounce
+  that dies out at t = 20 s); real trajectories are produced from measured
+  TVIRs (e.g. Watermark) by experiments/convert_watermark.py.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 10.0
+
+transducers:
+  T-001:
+    tvr_db: 150.0
+    rvr_db: -200.0
+
+modems:
+  - id: modem_a
+    usb_serial: "OA-2-1"
+    transducer_id: "T-001"
+  - id: modem_b
+    usb_serial: "OA-2-2"
+    transducer_id: "T-001"
+
+channels:
+  - from: modem_a
+    to: modem_b
+    # Bulk propagation delay (the trajectory's delays are excess over it).
+    range_m: 800.0
+    # Trajectory amplitudes are peak-normalized to 1.0 by the converter;
+    # gain_db sets the absolute level on top of the AFE-electrical chain
+    # (e.g. -TL(range) for geometric-comparable levels).
+    gain_db: -55.0
+    mode: replay
+    replay:
+      trajectory_file: "trajectories/example_three_path.octt"
+      # Record time where the first message starts.
+      offset_s: 0.0
+      # true: each message continues where the previous one ended;
+      # false: every message restarts at offset_s.
+      advance_per_message: true
+      # Advancing mode: wrap to the record start when fewer than this many
+      # seconds remain. 0 disables wrapping (past-end messages are
+      # truncated with a warning).
+      wrap_if_remaining_lt_s: 12.0
+
+  - from: modem_b
+    to: modem_a
+    range_m: 800.0
+    gain_db: -55.0
+    mode: replay
+    replay:
+      trajectory_file: "trajectories/example_three_path.octt"
+      advance_per_message: true
+      wrap_if_remaining_lt_s: 12.0
+
+noise:
+  wenz_sea_state: 2
+  min_margin_above_afe_db: 10.0
+  saltwater: true
+
+logging:
+  log_raw_tx: false
+  log_raw_rx: false

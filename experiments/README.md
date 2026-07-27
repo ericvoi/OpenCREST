@@ -38,6 +38,12 @@ experiments/
   exp1_channel_validation.py      fixed-range channel-model validation
   exp2_ranging_accuracy.py        two-way ranging accuracy at R=500 m
   exp3_janus_per.py               JANUS PER vs range across sea states
+  exp4_replay_validation.py       channel-replay round trip (chirp probes)
+  exp5_quasistatic_ber.py         BER vs SNR over quasi-static snapshots
+  convert_watermark.py            Watermark TVIR -> .octt (tracks or
+                                  --quasi-static delay-Doppler taps)
+  build_snapshot_ensemble.py      N quasi-static .octt + manifest.json
+                                  from one dataset's sounding files
   tests/
     _stub_binary.py               fake openCREST for hardware-less tests
     test_template.py
@@ -121,7 +127,19 @@ Sweep(
 experiments/.venv/bin/python -m experiments.exp1_channel_validation --seeds 20
 experiments/.venv/bin/python -m experiments.exp2_ranging_accuracy --seeds 10
 experiments/.venv/bin/python -m experiments.exp3_janus_per --sea-states 1,3,5
+
+# Quasi-static BER vs SNR: build the snapshot ensemble offline, then sweep.
+experiments/.venv/bin/python -m experiments.build_snapshot_ensemble \
+    datasets/WatermarkV1/Watermark/input/channels/BCH1/mat \
+    experiments/results/ensembles/BCH1 --n-snapshots 10 --plot
+experiments/.venv/bin/python -m experiments.exp5_quasistatic_ber \
+    --manifest experiments/results/ensembles/BCH1/manifest.json \
+    --gains -62 -58 -54 -50 -46
 ```
+
+`--gains` is space-separated (`--gains -62 -58 -54`); a bare
+comma-joined `-62,-58` trips argparse's option detection, so use spaces
+(or the `--gains=-62,-58` equals form).
 
 Each driver writes per-cell artifacts under `experiments/results/<expN>/<cell_id>/`
 and an aggregated `sweep_index.csv` at `experiments/results/<expN>/`. The

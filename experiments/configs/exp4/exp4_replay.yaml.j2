@@ -1,0 +1,71 @@
+{#- Experiment 4 — channel-replay validation.
+
+Single A->B replay channel driven by a tap-trajectory file. Modem A
+fires a sequence of firmware LFM chirps; each chirp probes the recorded
+channel at an advancing record time. noise.disable=true isolates the
+replayed multipath structure.
+
+Variables:
+  seed              (int)   random_seed for this cell
+  trajectory_file   (str)   absolute path to the .octt file
+  range_m           (float) bulk propagation range (default 300)
+  modem_a_serial    (str)   USB serial for modem A (default OA-2-1)
+  modem_b_serial    (str)   USB serial for modem B (default OA-2-2)
+  channel_gain_db   (float) additive trim (default -50)
+  tvr_a_db, rvr_a_db(float) modem A transducer params (defaults 172, -200)
+  tvr_b_db, rvr_b_db(float) modem B transducer params (defaults 170, -200)
+  output_directory  (str)   per-cell output dir (injected by Sweep runner)
+-#}
+name: exp4_replay_seed{{ seed|int }}
+description: >
+  Channel-replay validation cell, seed={{ seed|int }}. Firmware LFM
+  chirps from modem A probe a replayed tap trajectory; modem B's RX
+  carries the channel-modified copies.
+
+environment:
+  sound_speed_m_s: 1500.0
+  saltwater: true
+  spreading_model: spherical
+  max_message_duration_s: 1.0
+
+transducers:
+  T-001:
+    tvr_db: {{ "%.3f"|format(tvr_a_db|default(172.0)|float) }}
+    rvr_db: {{ "%.3f"|format(rvr_a_db|default(-200.0)|float) }}
+  T-002:
+    tvr_db: {{ "%.3f"|format(tvr_b_db|default(170.0)|float) }}
+    rvr_db: {{ "%.3f"|format(rvr_b_db|default(-200.0)|float) }}
+
+modems:
+  - id: modem_a
+    usb_serial: "{{ modem_a_serial | default('OA-2-1') }}"
+    transducer_id: "T-001"
+  - id: modem_b
+    usb_serial: "{{ modem_b_serial | default('OA-2-2') }}"
+    transducer_id: "T-002"
+
+channels:
+  - from: modem_a
+    to: modem_b
+    range_m: {{ "%.3f"|format(range_m|default(300.0)|float) }}
+    gain_db: {{ "%.3f"|format(channel_gain_db|default(-50.0)|float) }}
+    mode: replay
+    replay:
+      trajectory_file: "{{ trajectory_file }}"
+      offset_s: 0.0
+      advance_per_message: true
+      wrap_if_remaining_lt_s: 0.0
+
+noise:
+  disable: true
+
+logging:
+  log_raw_tx: true
+  log_raw_rx: true
+  log_processed: false
+  output_directory: "{{ output_directory }}"
+  file_format: wav
+  log_processing_time_histogram: true
+  log_message_events: true
+
+random_seed: {{ seed|int }}

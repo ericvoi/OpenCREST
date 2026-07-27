@@ -4,8 +4,12 @@
 #include <cstddef>
 
 #include "config/scenario.hpp"
+#include "core/constants.hpp"
 
 namespace openCREST {
+
+// kMaxImageOrder / MAX_GEOMETRIC_PATHS live in core/constants.hpp so the
+// config loader can validate max_bounces without depending on this layer.
 
 // One ray-path arrival in the method-of-images scene.
 struct PathTap {
@@ -17,9 +21,11 @@ struct PathTap {
 
 // Method-of-images channel scene: water column with a pressure-release
 // surface at z=0 and a partially-reflective bottom at z=water_depth_m.
-// For a given (source depth, receiver depth, horizontal range R) emits up
-// to five enabled path arrivals (direct, surface, bottom, surface-bottom,
-// bottom-surface), sorted by length ascending.
+// For a given (source depth, receiver depth, horizontal range R) emits the
+// enabled path arrivals sorted by length ascending: direct, surface, bottom,
+// and the two order-2 (surface-bottom / bottom-surface) paths, plus the
+// order-3/4 paths when config.max_bounces raises the reflection order — up
+// to MAX_GEOMETRIC_PATHS arrivals.
 //
 // Pure and zero-allocation: compute_paths()/resolve() write into a caller
 // array and return scalar PODs, so the Channel hot path may call them
@@ -31,9 +37,9 @@ public:
 
     // Fill `out` with PathTap entries at horizontal range `range_m`, one per
     // enabled-and-physically-realisable path, sorted by length ascending.
-    // Returns the number of entries written (≤ 5).
+    // Returns the number of entries written (≤ MAX_GEOMETRIC_PATHS).
     std::size_t compute_paths(float range_m,
-                              std::array<PathTap, 5>& out) const;
+                              std::array<PathTap, MAX_GEOMETRIC_PATHS>& out) const;
 
     struct ResolvedPath {
         // Excess over the direct path in fractional receiver-rate samples.

@@ -453,7 +453,8 @@ def render_per_figure(analyses:   Sequence[CellAnalysis],
                       sea_states: Sequence[int] = DEFAULT_SEA_STATES) -> None:
     """PER-vs-range curves, one per sea state."""
     import matplotlib.pyplot as plt           # local: plotting is optional
-    fig, ax = plt.subplots(figsize=(7.0, 4.2))
+    plotting.apply_paper_style()
+    fig, ax = plt.subplots()
 
     pooled = pool_across_seeds([a.result for a in analyses])
     if not pooled:
@@ -485,9 +486,8 @@ def render_per_figure(analyses:   Sequence[CellAnalysis],
                         alpha=0.18, color=line.get_color(),
                         linewidth=0)
 
-    base = plt.rcParams["font.size"]
-    ax.set_xlabel("Range (m)",         fontsize=base * 1.5)
-    ax.set_ylabel("Packet error rate", fontsize=base * 1.5)
+    ax.set_xlabel("Range (m)")
+    ax.set_ylabel("Packet error rate")
     ax.set_ylim(-0.02, 1.05)
     ax.set_xlim(x_lo, x_hi)
     ax.grid(True, alpha=0.3)

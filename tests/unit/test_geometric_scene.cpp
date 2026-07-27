@@ -11,6 +11,7 @@ using openCREST::EnvironmentConfig;
 using openCREST::GeometricScene;
 using openCREST::GeometricSceneConfig;
 using openCREST::PathTap;
+using openCREST::MAX_GEOMETRIC_PATHS;
 
 namespace {
 
@@ -57,7 +58,7 @@ TEST(GeometricScene, DirectPathClosedForm) {
     g.enable_bottom  = false;
     GeometricScene scene(g, base_env());
 
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     const size_t n = scene.compute_paths(1000.0f, out);
     ASSERT_EQ(n, 1u);
     EXPECT_NEAR(out[0].length_m,
@@ -74,7 +75,7 @@ TEST(GeometricScene, SurfacePathClosedForm) {
     g.enable_bottom = false;
     GeometricScene scene(g, base_env());
 
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     const size_t n = scene.compute_paths(1000.0f, out);
     ASSERT_EQ(n, 1u);
     EXPECT_NEAR(out[0].length_m,
@@ -91,7 +92,7 @@ TEST(GeometricScene, BottomPathClosedForm) {
     g.enable_surface = false;
     GeometricScene scene(g, base_env());
 
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     const size_t n = scene.compute_paths(1000.0f, out);
     ASSERT_EQ(n, 1u);
     const float dz = (g.water_depth_m - g.source_depth_m)
@@ -110,7 +111,7 @@ TEST(GeometricScene, SurfaceBottomClosedForm) {
     g.enable_surface_bottom = true;
     GeometricScene scene(g, base_env());
 
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     const size_t n = scene.compute_paths(800.0f, out);
     ASSERT_EQ(n, 1u);
     const float dz = (2.0f * g.water_depth_m - g.source_depth_m) + g.receiver_depth_m;
@@ -129,7 +130,7 @@ TEST(GeometricScene, BottomSurfaceClosedForm) {
     g.enable_bottom_surface = true;
     GeometricScene scene(g, base_env());
 
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     const size_t n = scene.compute_paths(800.0f, out);
     ASSERT_EQ(n, 1u);
     const float dz = g.source_depth_m + (2.0f * g.water_depth_m - g.receiver_depth_m);
@@ -150,7 +151,7 @@ TEST(GeometricScene, PathsOrderedByLengthAscending) {
     g.enable_bottom_surface = true;
     GeometricScene scene(g, base_env());
 
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     const size_t n = scene.compute_paths(1000.0f, out);
     ASSERT_EQ(n, 5u);
     for (size_t i = 1; i < n; ++i) {
@@ -161,7 +162,7 @@ TEST(GeometricScene, PathsOrderedByLengthAscending) {
 
 TEST(GeometricScene, DirectPathFirstWhenEnabled) {
     GeometricScene scene(base_geom(), base_env());
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     const size_t n = scene.compute_paths(1000.0f, out);
     ASSERT_GE(n, 1u);
     EXPECT_FLOAT_EQ(out[0].reflection_product, 1.0f);  // direct
@@ -171,7 +172,7 @@ TEST(GeometricScene, DisablingPathsReducesCount) {
     auto g = base_geom();
     g.enable_surface = false;
     GeometricScene scene(g, base_env());
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     EXPECT_EQ(scene.compute_paths(1000.0f, out), 2u);   // direct + bottom
 
     g.enable_bottom = false;
@@ -185,7 +186,7 @@ TEST(GeometricScene, AllPathsDisabledReturnsZero) {
     g.enable_surface = false;
     g.enable_bottom  = false;
     GeometricScene scene(g, base_env());
-    std::array<PathTap, 5> out{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
     EXPECT_EQ(scene.compute_paths(1000.0f, out), 0u);
 }
 
@@ -195,7 +196,7 @@ TEST(GeometricScene, AllPathsDisabledReturnsZero) {
 
 TEST(GeometricScene, ResolveDirectDeltaIsZero) {
     GeometricScene scene(base_geom(), base_env());
-    std::array<PathTap, 5> paths{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> paths{};
     const size_t n = scene.compute_paths(1000.0f, paths);
     ASSERT_GE(n, 1u);
     const auto resolved = scene.resolve(paths[0], paths[0].length_m,
@@ -205,7 +206,7 @@ TEST(GeometricScene, ResolveDirectDeltaIsZero) {
 
 TEST(GeometricScene, ResolveReflectionDeltaIsPositive) {
     GeometricScene scene(base_geom(), base_env());
-    std::array<PathTap, 5> paths{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> paths{};
     const size_t n = scene.compute_paths(1000.0f, paths);
     ASSERT_GE(n, 2u);
     const float direct_len = paths[0].length_m;
@@ -218,7 +219,7 @@ TEST(GeometricScene, ResolveReflectionDeltaIsPositive) {
 
 TEST(GeometricScene, ResolveDeltaMatchesExcessOverDirectInSamples) {
     GeometricScene scene(base_geom(), base_env());
-    std::array<PathTap, 5> paths{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> paths{};
     const size_t n = scene.compute_paths(1000.0f, paths);
     ASSERT_GE(n, 2u);
     const float direct_len = paths[0].length_m;
@@ -239,7 +240,7 @@ TEST(GeometricScene, ResolveDeltaIsFractional) {
     g.enable_surface = false;
     g.enable_bottom  = false;
     GeometricScene scene(g, base_env());
-    std::array<PathTap, 5> paths{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> paths{};
     // Range 1234.0 m with depth difference -50 m → length ~1235.012 m, direct
     // anchor = length itself, so resolve against a slightly shorter anchor
     // to exercise fractional excess.
@@ -257,7 +258,7 @@ TEST(GeometricScene, ResolveGainMatchesEq2HandComputation) {
     auto g = base_geom();
     g.spreading_exponent_k = 1.5f;
     GeometricScene scene(g, base_env());
-    std::array<PathTap, 5> paths{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> paths{};
     const size_t n = scene.compute_paths(1000.0f, paths);
     ASSERT_GE(n, 2u);
 
@@ -278,4 +279,95 @@ TEST(GeometricScene, ResolveGainMatchesEq2HandComputation) {
         EXPECT_NEAR(r.gain_linear, expected, std::abs(expected) * 1e-3f + 1e-12f)
             << "path " << i << " (length " << ell << ")";
     }
+}
+
+// ---------------------------------------------------------------------------
+// Higher-order image expansion (max_bounces)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Locate the path whose slant length matches the closed-form dz at range R.
+const PathTap* path_with_dz(const std::array<PathTap, MAX_GEOMETRIC_PATHS>& out,
+                            size_t n, float R, float dz) {
+    const float want = hypot_path(R, dz);
+    for (size_t i = 0; i < n; ++i)
+        if (std::abs(out[i].length_m - want) < 1e-1f) return &out[i];
+    return nullptr;
+}
+} // namespace
+
+TEST(GeometricScene, MaxBouncesDefaultsToFivePaths) {
+    // Full low-order scene, default max_bounces (2) -> the classic five paths.
+    auto g = base_geom();
+    g.enable_surface_bottom = true;
+    g.enable_bottom_surface = true;
+    GeometricScene scene(g, base_env());
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
+    EXPECT_EQ(scene.compute_paths(1000.0f, out), 5u);
+}
+
+TEST(GeometricScene, MaxBouncesRaisesPathCount) {
+    auto g = base_geom();
+    g.enable_surface_bottom = true;
+    g.enable_bottom_surface = true;
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
+
+    g.max_bounces = 3;
+    EXPECT_EQ(GeometricScene(g, base_env()).compute_paths(1000.0f, out), 7u);
+
+    g.max_bounces = 4;
+    EXPECT_EQ(GeometricScene(g, base_env()).compute_paths(1000.0f, out), 9u);
+}
+
+TEST(GeometricScene, OrderThreePathsClosedForm) {
+    auto g = base_geom();          // D=120 zs=50 zr=100 gs=-0.9 gb=0.7
+    g.enable_surface_bottom = true;
+    g.enable_bottom_surface = true;
+    g.max_bounces = 3;
+    GeometricScene scene(g, base_env());
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
+    const size_t n = scene.compute_paths(1000.0f, out);
+
+    // surface-bottom-surface: dz = 2D + zs + zr, Gamma = gs^2 * gb.
+    const PathTap* sbs = path_with_dz(out, n, 1000.0f, 2*120.0f + 50.0f + 100.0f);
+    ASSERT_NE(sbs, nullptr);
+    EXPECT_NEAR(sbs->reflection_product, 0.81f * 0.7f, 1e-5f);
+    EXPECT_TRUE(sbs->has_surface_bounce);
+    EXPECT_TRUE(sbs->has_bottom_bounce);
+
+    // bottom-surface-bottom: dz = 4D - zs - zr, Gamma = gs * gb^2.
+    const PathTap* bsb = path_with_dz(out, n, 1000.0f, 4*120.0f - 50.0f - 100.0f);
+    ASSERT_NE(bsb, nullptr);
+    EXPECT_NEAR(bsb->reflection_product, -0.9f * 0.49f, 1e-5f);
+}
+
+TEST(GeometricScene, OrderFourPathsClosedForm) {
+    auto g = base_geom();
+    g.enable_surface_bottom = true;
+    g.enable_bottom_surface = true;
+    g.max_bounces = 4;
+    GeometricScene scene(g, base_env());
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
+    const size_t n = scene.compute_paths(1000.0f, out);
+
+    // Both order-4 paths carry Gamma = gs^2 * gb^2.
+    const PathTap* p1 = path_with_dz(out, n, 1000.0f, 4*120.0f + 50.0f - 100.0f);
+    const PathTap* p2 = path_with_dz(out, n, 1000.0f, 4*120.0f - 50.0f + 100.0f);
+    ASSERT_NE(p1, nullptr);
+    ASSERT_NE(p2, nullptr);
+    EXPECT_NEAR(p1->reflection_product, 0.81f * 0.49f, 1e-5f);
+    EXPECT_NEAR(p2->reflection_product, 0.81f * 0.49f, 1e-5f);
+}
+
+TEST(GeometricScene, HigherOrderRespectsDirectToggleButNotLowOrderFlags) {
+    // Orders 3-4 are gated only by max_bounces, independent of the order-2
+    // enable flags; the low-order flags still gate their own paths.
+    auto g = base_geom();
+    g.enable_surface_bottom = false;   // order-2 paths off ...
+    g.enable_bottom_surface = false;
+    g.max_bounces = 4;                 // ... but order 3-4 on
+    GeometricScene scene(g, base_env());
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> out{};
+    // direct + surface + bottom (3) + order3 (2) + order4 (2) = 7.
+    EXPECT_EQ(scene.compute_paths(1000.0f, out), 7u);
 }

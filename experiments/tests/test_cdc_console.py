@@ -185,6 +185,39 @@ def test_send_janus_011_01_tx_sequence(tmp_path: Path) -> None:
     )
 
 
+def test_send_eval_tx_sequence(tmp_path: Path) -> None:
+    """ROOT -> EVAL (6) -> TRANSDUCER (3); no further prompt."""
+    fake = FakeSerial()
+    console = CdcConsole.attach_backend("modem_a", fake,
+                                        log_path=tmp_path / "cdc.log")
+    try:
+        console.send_eval_tx()
+    finally:
+        console.detach()
+    assert bytes(fake.written) == (
+        b"\x1b\x1b\x1b\x1b"
+        + b"6\r"
+        + b"3\r"
+    )
+
+
+def test_set_eval_message_len_sequence(tmp_path: Path) -> None:
+    """ROOT -> EVAL (6) -> SETLEN (1) -> [bytes]."""
+    fake = FakeSerial()
+    console = CdcConsole.attach_backend("modem_a", fake,
+                                        log_path=tmp_path / "cdc.log")
+    try:
+        console.set_eval_message_len(100)
+    finally:
+        console.detach()
+    assert bytes(fake.written) == (
+        b"\x1b\x1b\x1b\x1b"
+        + b"6\r"
+        + b"1\r"
+        + b"100\r"
+    )
+
+
 # ---------------------------------------------------------------------------
 # verify_main_menu — modem responsiveness check
 # ---------------------------------------------------------------------------

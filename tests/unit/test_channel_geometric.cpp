@@ -22,6 +22,7 @@ using openCREST::GeometricSceneConfig;
 using openCREST::MultipathTap;
 using openCREST::PairBuffer;
 using openCREST::PathTap;
+using openCREST::MAX_GEOMETRIC_PATHS;
 
 namespace {
 
@@ -131,7 +132,7 @@ TEST(ChannelGeometric, MaxTapDeltaCoversEnvelope) {
     Channel ch(cfg, make_cal(), make_cal(), {}, {});
 
     GeometricScene scene(g, [&](){ EnvironmentConfig e; e.sound_speed_m_s = SOUND; return e; }());
-    std::array<PathTap, 5> paths{};
+    std::array<PathTap, MAX_GEOMETRIC_PATHS> paths{};
     const size_t n = scene.compute_paths(g.r_max_m, paths);
     ASSERT_GT(n, 1u);
     const float longest_at_r_max = paths[n - 1].length_m;

@@ -14,12 +14,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+# One place for every paper figure's element sizing so all experiments'
+# plots match (label/tick/legend sizes, figure size). Labels and ticks are
+# 1.5x the base font, matching the ranging (exp2) figure.
 _PAPER_RC = {
     "figure.figsize":  (6.5, 4.0),
     "savefig.dpi":     200,
     "axes.grid":       True,
     "grid.alpha":      0.3,
     "font.size":       10,
+    "axes.labelsize":  15,
+    "axes.titlesize":  15,
+    "xtick.labelsize": 15,
+    "ytick.labelsize": 15,
+    "legend.fontsize": 12,
 }
 
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import queue
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -143,11 +144,14 @@ class CdcConsole:
     MAIN_TXRX  = "4"
     MAIN_DBG   = "2"
     MAIN_JANUS = "5"
+    MAIN_EVAL  = "6"
     TXRX_STROUT     = "3"      # "Send string through transducer"
     TXRX_RANGEOUT   = "9"      # "Send ranging request through transducer"
     DBG_CHIRP_TX    = "15"     # "Send LFM chirp through transducer"
     JANUS_SEND               = "2"  # "Send JANUS message"
     JANUS_SEND_011_01_OUT    = "1"  # "Send JANUS 011 01 (SMS) through transducer"
+    EVAL_SETLEN       = "1"    # "Set evaluation message length"
+    EVAL_TRANSDUCER   = "3"    # "Send evaluation message through transducer"
 
     LINE_TERMINATOR = "\r"
     BACK_KEY        = "\x1b"   # WITHDRAW_CHAR
@@ -174,6 +178,7 @@ class CdcConsole:
 
         self._lines: queue.Queue[str] = queue.Queue()
         self._stop_evt = threading.Event()
+        self._reader_error: Optional[Exception] = None
         self._buf      = bytearray()
         self._reader   = threading.Thread(target=self._read_loop,
                                           name=f"cdc-{modem_id}",
@@ -244,11 +249,31 @@ class CdcConsole:
         unplug, kernel I/O error)."""
         return self._reader.is_alive() and not self._stop_evt.is_set()
 
+    @property
+    def reader_error(self) -> Optional[Exception]:
+        """The exception that killed the reader thread, or None. Lets a
+        caller distinguish a genuine I/O death from a clean detach."""
+        return self._reader_error
+
     def _read_loop(self) -> None:
         while not self._stop_evt.is_set():
             try:
                 chunk = self._serial.read(64)
-            except Exception:
+            except Exception as exc:
+                # Surface the death instead of dying silently. A reader that
+                # stops here makes the caller's TX loop bail before it logs
+                # any request, which upstream reads as a bare "no usable
+                # cell" with no hint why (USB I/O error, hot-unplug, or a
+                # leaked sim still holding the port).
+                self._reader_error = exc
+                if not self._stop_evt.is_set():
+                    line = (f"[cdc] {self.modem_id} reader thread died: "
+                            f"{type(exc).__name__}: {exc}")
+                    try:
+                        self._log.write(line + "\n")
+                    except Exception:
+                        pass
+                    sys.stderr.write(line + "\n")
                 break
             if not chunk:
                 continue
@@ -364,6 +389,31 @@ class CdcConsole:
         self.send_line(self.JANUS_SEND)
         self.send_line(self.JANUS_SEND_011_01_OUT)
         self.send_line(text)
+
+    def send_eval_tx(self) -> None:
+        """Transmit a PRBS evaluation message through the transducer (the
+        HIL path when the modem is in HIL mode). The receiving modem
+        scores the cargo against the shared PRBS and prints
+        ``Uncoded BER: e/n, x%`` / ``Coded BER: e/n, x%``.
+
+        Menu path: ROOT -> ``EVAL`` (6) -> ``TRANSDUCER`` (3). Cargo
+        length comes from the firmware's eval-message-length parameter
+        (:meth:`set_eval_message_len`).
+        """
+        self.reset_to_main()
+        self.send_line(self.MAIN_EVAL)
+        self.send_line(self.EVAL_TRANSDUCER)
+
+    def set_eval_message_len(self, n_bytes: int) -> None:
+        """Set the PRBS evaluation cargo length in bytes (firmware range
+        1..480, default 100).
+
+        Menu path: ROOT -> ``EVAL`` (6) -> ``SETLEN`` (1) -> [value].
+        """
+        self.reset_to_main()
+        self.send_line(self.MAIN_EVAL)
+        self.send_line(self.EVAL_SETLEN)
+        self.send_line(str(int(n_bytes)))
 
     # --- line consumption -----------------------------------------------
 

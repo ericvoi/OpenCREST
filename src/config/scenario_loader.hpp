@@ -34,10 +34,16 @@ public:
 //     - from: modem_a
 //       to: modem_b              # may equal from for loopback
 //       range_m: 150.0
-//       multipath_taps:          # optional
+//       mode: static             # optional: static|geometric|replay
+//       multipath_taps:          # static mode only, optional
 //         - delay_s: 0.0
 //           gain_db: 0.0         # converted to linear amplitude
 //           phase_deg: 0.0       # converted to radians
+//       replay:                  # required for mode: replay
+//         trajectory_file: "x.octt"   # relative to the scenario file
+//         offset_s: 0.0               # optional record start offset
+//         advance_per_message: false  # optional; true = continue record
+//         wrap_if_remaining_lt_s: 0.0 # optional dead-zone wrap
 //
 //   noise:                       # optional section
 //     wenz_sea_state: 3

@@ -467,7 +467,13 @@ When a modem finishes transmitting, the last TX samples remain in the delay line
 
 #### 6.3.4 Tap Configuration
 
-Taps are statically defined in the scenario configuration file and remain fixed for the duration of the scenario.
+Where taps come from depends on the channel's `mode`:
+
+| Mode | Tap source | Time behavior |
+|---|---|---|
+| `static` | `multipath_taps` in the scenario YAML | Fixed for the scenario duration |
+| `geometric` | Method-of-images scene evaluated at R(t) | Recomputed every processing block |
+| `replay` | Measured trajectory file (`.octt`, §6.8) | Interpolated every processing block |
 
 ### 6.4 Path Loss
 
@@ -578,6 +584,8 @@ noise:
 
 Noise is added **after** all channel contributions are summed (step [7] in §6.1) and **before** the final DAC conversion. The noise is common to the receiver — all channels into a given modem share the same ambient noise floor. This is physically correct: ambient noise is a property of the receiver's environment, not of a specific source-receiver path.
 
+Recorded-noise replay (future work) would attach at this same summation point, alongside or instead of the Wenz generator.
+
 ### 6.7 Signal Combination
 
 When multiple modems transmit simultaneously (or their multipath tails overlap in time), the receiving modem's RX stream is the **linear sum** of all individually-processed channel outputs plus ambient noise:
@@ -587,6 +595,48 @@ RX_B[n] = Σ_A (channel_A→B[n]) + noise_B[n]
 ```
 
 **Saturation handling:** The modem provides two selectable input attenuation levels (30 dB apart). In scenarios where the summed signal could clip the 12-bit DAC range, the host can command the modem to switch to the higher attenuation setting.
+
+### 6.8 Channel Replay
+
+Replay channels render measured time-varying impulse responses (e.g. extracted from the Watermark dataset) instead of an analytic model. An offline converter (`experiments/convert_watermark.py`) reduces a recorded TVIR to per-tap delay/amplitude trajectories; the simulator renders them through the same per-tap fractional-delay pipeline as the geometric mode, so Doppler emerges from the time-varying delays at the modem's actual band. The source modem of a replay channel must not declare radial velocity/acceleration — motion comes from the recording.
+
+#### 6.8.1 Tap Trajectory File Format (`.octt`)
+
+Little-endian, packed. Reference writer: `experiments/lib/tap_trajectory.py`; reference reader: `src/core/tap_trajectory.hpp`.
+
+Header (64 bytes):
+
+| Offset | Type | Field | Contract |
+|---|---|---|---|
+| 0 | `char[4]` | magic | `"OCTT"` |
+| 4 | `u32` | version | 1 |
+| 8 | `u32` | `tap_count` | 1..32 (`MAX_TAPS_PER_CHANNEL`) |
+| 12 | `u32` | `frame_count` | ≥ 2 |
+| 16 | `f64` | `dt_s` | > 0; frame *i* is record time *i·dt_s* |
+| 24 | `f64` | `fc_meas_hz` | > 0; measurement center frequency |
+| 32 | `f64` | `max_delay_s` | equals the data maximum (±1 µs); ≤ `MAX_MULTIPATH_DELAY_S` |
+| 40 | `u8[24]` | reserved | zero |
+
+Data: `frame_count × tap_count` records, frame-major (all taps of frame 0, then frame 1, …):
+
+| Type | Field | Contract |
+|---|---|---|
+| `f64` | `delay_s` | excess delay over the bulk propagation delay; finite, ≥ 0 |
+| `f32` | `amplitude` | linear, finite, ≥ 0 — tap phase is encoded in the delay track |
+| `f32` | reserved | zero (16-byte record alignment) |
+
+Interpolation contract: tap state between frames is Catmull-Rom interpolated on the uniform grid with clamped endpoints (first/last frames virtually duplicated); query time is clamped to `[0, (frame_count−1)·dt_s]`; interpolated amplitude is clamped to ≥ 0. The converter must guarantee the *interpolated* delay track stays above a positive guard floor (2×10⁻⁵ s recommended) — Catmull-Rom can overshoot below the raw sample minimum.
+
+Amplitudes are relative (converter normalizes the global peak to 1.0); absolute level is set by the channel's AFE chain gain and `gain_db`. A frequency-independent phase term (e.g. a π reflection flip) encoded as delay is exact only at `fc_meas_hz`; replayed at a different carrier it reproduces an approximate phase — negligible for delay/Doppler structure, documented here as the format's known caveat.
+
+#### 6.8.2 Replay Clock
+
+The record does not advance between messages. Each message maps intra-message time `t` onto record time `offset + t`:
+
+- **Fixed mode** (`advance_per_message: false`, default): every message restarts at `offset_s`.
+- **Advancing mode** (`advance_per_message: true`): the first message starts at `offset_s`; each subsequent message continues where the previous one — including its multipath-tail drain — ended. When the remaining record is shorter than `wrap_if_remaining_lt_s`, the offset wraps to the record start (0 disables wrapping).
+
+A message that runs past the end of the record is acoustically truncated: every tap's amplitude ramps to zero across one frame interval and holds silent (delay holds its final value), and a warning is logged once per message. The bulk propagation delay comes from `range_m` / `propagation_delay_s` exactly as in static mode; the trajectory's delays are excess over it.
 
 ---
 

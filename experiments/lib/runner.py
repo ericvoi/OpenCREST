@@ -201,6 +201,8 @@ class Sweep:
         out_root = Path(self.out_dir)
         out_root.mkdir(parents=True, exist_ok=True)
 
+        self._warn_stragglers()
+
         cells = self.cells()
         results: list[CellResult] = []
 
@@ -327,23 +329,40 @@ class Sweep:
         handle.process = proc
         handle.started_at = time.monotonic()
 
-        if self.pre_run is not None:
-            try:
-                self.pre_run(handle)
-            except Exception as exc:                            # noqa: BLE001
-                # Hook failure shouldn't kill the cell; log and continue.
-                stderr_log.write(f"[runner] pre_run hook failed: {exc}\n")
+        exit_code: int | None = None
+        watchdog_reason: str | None = None
+        try:
+            if self.pre_run is not None:
+                try:
+                    self.pre_run(handle)
+                except Exception as exc:                        # noqa: BLE001
+                    # Hook failure shouldn't kill the cell; log to the
+                    # cell's stderr AND the console so a wedged/unresponsive
+                    # modem surfaces immediately instead of as a bare "no
+                    # usable cell" three layers up.
+                    msg = f"[runner] pre_run hook failed: {exc}"
+                    stderr_log.write(msg + "\n")
+                    self._emit(msg)
 
-        exit_code, watchdog_reason = self._wait_or_terminate(handle, proc)
+            exit_code, watchdog_reason = self._wait_or_terminate(handle, proc)
 
-        if self.post_run is not None:
-            try:
-                self.post_run(handle)
-            except Exception as exc:                            # noqa: BLE001
-                stderr_log.write(f"[runner] post_run hook failed: {exc}\n")
-
-        stdout_log.close()
-        stderr_log.close()
+            if self.post_run is not None:
+                try:
+                    self.post_run(handle)
+                except Exception as exc:                        # noqa: BLE001
+                    msg = f"[runner] post_run hook failed: {exc}"
+                    stderr_log.write(msg + "\n")
+                    self._emit(msg)
+        except BaseException:
+            # Ctrl+C (KeyboardInterrupt) or any unexpected error: the child
+            # runs in its own session via setsid, so the terminal's SIGINT
+            # never reached it. Terminate it explicitly or it orphans and
+            # keeps holding the modem, poisoning every later cell.
+            self._terminate(proc)
+            raise
+        finally:
+            stdout_log.close()
+            stderr_log.close()
 
         summary = expected_summary if expected_summary.is_file() else None
         err = ""
@@ -423,6 +442,28 @@ class Sweep:
                 return proc.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
                 return None
+
+    def _warn_stragglers(self) -> None:
+        """Best-effort pre-flight: warn if simulator processes for this
+        binary are already running. A leaked sim from an aborted run holds
+        the modem in HIL mode, so every cell here fails with an empty TX log
+        ("no usable cell"). Non-fatal, POSIX-only."""
+        if os.name != "posix":
+            return
+        try:
+            out = subprocess.run(["pgrep", "-af", str(self.binary)],
+                                 capture_output=True, text=True, timeout=5.0)
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return
+        stragglers = [ln for ln in out.stdout.splitlines() if ln.strip()]
+        if stragglers:
+            self._emit(
+                f"[runner] WARNING: {len(stragglers)} process(es) for "
+                f"{Path(self.binary).name} already running — a leaked "
+                "simulator holds the modem and will fail every cell. Kill "
+                f"first:  pkill -KILL -f '{self.binary}'")
+            for ln in stragglers[:8]:
+                self._emit(f"[runner]   {ln}")
 
     # --- progress reporter ----------------------------------------------
 

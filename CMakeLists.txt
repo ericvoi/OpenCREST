@@ -47,10 +47,14 @@ add_library(openCREST_core STATIC
     src/dsp/hilbert_filter.cpp
     src/dsp/source_delay_line.cpp
     src/dsp/per_tap_farrow.cpp
+    # Core
+    src/core/tap_trajectory.cpp
     # Channel
     src/channel/pair_buffer.cpp
     src/channel/channel.cpp
     src/channel/geometric_scene.cpp
+    src/channel/geometric_tap_source.cpp
+    src/channel/replay_tap_source.cpp
     src/channel/receiver_mix.cpp
     src/channel/source_worker.cpp
     src/channel/channel_engine.cpp

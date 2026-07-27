@@ -42,18 +42,30 @@ size_t ChannelEngine::worst_case_pair_capacity(const ScenarioConfig& scenario,
     // Geometric channels: longest_path_at_r_max (since Channel anchors
     // base_delay at direct_path_at_r_min and max_tap_delta covers up to
     // longest_path_at_r_max minus that anchor).
+    // Replay channels: base_delay + the trajectory's max excess delay
+    // (lifted from the .octt header by the scenario loader).
     size_t worst_channel_extent = 0;
 
     for (const auto& cc : scenario.channels) {
         size_t extent = 0;
 
-        if (cc.mode == ChannelMode::Geometric) {
+        if (cc.mode == ChannelMode::Replay) {
+            const double base_delay_seconds =
+                (cc.propagation_delay_s >= 0.0f)
+                    ? static_cast<double>(cc.propagation_delay_s)
+                    : static_cast<double>(cc.range_m) / sound_speed;
+            const size_t base = static_cast<size_t>(std::round(
+                base_delay_seconds * sample_rate));
+            const size_t mp = static_cast<size_t>(std::ceil(
+                cc.replay.max_delay_s * sample_rate));
+            extent = base + mp;
+        } else if (cc.mode == ChannelMode::Geometric) {
             // Transient scene used only to query worst path length at r_max.
             EnvironmentConfig env;
             env.sound_speed_m_s = scenario.environment.sound_speed_m_s;
             env.saltwater       = scenario.environment.saltwater;
             GeometricScene scene(cc.geometry, env);
-            std::array<PathTap, 5> paths_rmax{};
+            std::array<PathTap, MAX_GEOMETRIC_PATHS> paths_rmax{};
             const std::size_t n = scene.compute_paths(
                 cc.geometry.r_max_m, paths_rmax);
             const float longest_at_rmax = (n > 0)

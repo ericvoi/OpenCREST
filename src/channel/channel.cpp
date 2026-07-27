@@ -1,5 +1,6 @@
 #include "channel/channel.hpp"
-#include "channel/geometric_scene.hpp"
+#include "channel/geometric_tap_source.hpp"
+#include "channel/replay_tap_source.hpp"
 #include "core/constants.hpp"
 #include "dsp/path_loss.hpp"
 #include "dsp/physical_gain.hpp"
@@ -24,13 +25,42 @@ double clamp_sound_speed(float configured) {
 
 } // namespace
 
+void Channel::init_read_style_buffers(size_t tap_count,
+                                      size_t sdl_worst_excess_samples) {
+    taps_start_buf_.assign(tap_count, SourcedTap{});
+    taps_end_buf_  .assign(tap_count, SourcedTap{});
+    tap_states_    .assign(tap_count, dsp::TapState{});
+
+    // SourceDelayLine sizing. Worst-case read-back behind the producer
+    // comes from the source; adds Catmull-Rom margin (4), clock-drift
+    // margin (one block at configured PPM), and PROCESSING_BLOCK_SIZE for
+    // samples written this block but not yet read.
+    constexpr size_t catmull_rom_margin = 4;
+    const double clock_drift_per_block =
+        static_cast<double>(PROCESSING_BLOCK_SIZE) *
+        std::abs(static_cast<double>(config_.clock_offset_ppm)) * 1e-6;
+    const size_t clock_drift_margin =
+        static_cast<size_t>(std::ceil(clock_drift_per_block)) + 1;
+    const size_t sdl_min_capacity = sdl_worst_excess_samples
+        + catmull_rom_margin + clock_drift_margin + PROCESSING_BLOCK_SIZE;
+    source_delay_line_.resize(sdl_min_capacity);
+
+    per_tap_scratch_.assign(PROCESSING_BLOCK_SIZE, 0.0f);
+
+    // Read-style modes bypass scatter_taps(); these scratches are unused
+    // but cheap to keep allocated.
+    resample_buf_.assign(PROCESSING_BLOCK_SIZE, 0.0f);
+    gained_buf_  .assign(PROCESSING_BLOCK_SIZE, 0.0f);
+}
+
 double Channel::current_doppler_ratio() const {
     const double base_ratio = 1.0 +
         static_cast<double>(config_.clock_offset_ppm) * 1e-6;
 
-    // Geometric mode: range-rate Doppler comes from time-varying tap deltas;
-    // the Farrow ratio carries only the crystal-clock offset.
-    if (geometric_) return base_ratio;
+    // Read-style modes (geometric / replay): range-rate Doppler comes from
+    // time-varying tap deltas; the Farrow ratio carries only the
+    // crystal-clock offset.
+    if (tap_source_) return base_ratio;
 
     const double sound_speed = clamp_sound_speed(config_.sound_speed_m_s);
     const double t           = (sample_rate_ > 0)
@@ -50,12 +80,11 @@ Channel::Channel(const ChannelConfig&   config,
                  float                  receive_boost_db)
     : config_(config)
     , sample_rate_(source_cal.adc_sampling_rate)
-    , geometric_(config.mode == ChannelMode::Geometric)
 {
     // Geometric mode: the acoustic chain (spreading + Thorp) comes from
-    // GeometricScene per-block. Only the AFE-electrical chain and the
+    // GeometricTapSource per-block. Only the AFE-electrical chain and the
     // additive gain_db trim / receive boost multiply on top.
-    if (geometric_) {
+    if (config_.mode == ChannelMode::Geometric) {
         const double afe_chain_db = dsp::compute_channel_afe_chain_gain_db(
             source_cal, receiver_cal,
             source_transducer, receiver_transducer,
@@ -63,85 +92,15 @@ Channel::Channel(const ChannelConfig&   config,
         const double total_db = afe_chain_db
             + static_cast<double>(config_.gain_db)
             + static_cast<double>(receive_boost_db);
-        afe_chain_gain_      = static_cast<float>(std::pow(10.0, total_db / 20.0));
-        source_center_fc_hz_ = source_cal.center_freq_hz;
-        saltwater_           = config_.saltwater;
+        afe_chain_gain_ = static_cast<float>(std::pow(10.0, total_db / 20.0));
 
-        EnvironmentConfig env;
-        env.sound_speed_m_s  = config_.sound_speed_m_s;
-        env.saltwater        = config_.saltwater;
-        env.spreading_factor = config_.spreading_factor;
-        scene_ = std::make_unique<GeometricScene>(config_.geometry, env);
+        auto source = std::make_unique<GeometricTapSource>(
+            config_, source_cal.center_freq_hz, sample_rate_);
+        base_delay_samples_    = source->base_delay_samples();
+        max_tap_delta_samples_ = source->max_tap_delta_samples();
 
-        // Anchor base_delay at the shortest enabled path at r_min so every
-        // tap's excess delta_samples stays >= 0 across the R envelope.
-        std::array<PathTap, 5> paths_rmin{};
-        const std::size_t n_rmin = scene_->compute_paths(
-            config_.geometry.r_min_m, paths_rmin);
-        if (n_rmin == 0) {
-            throw std::invalid_argument(
-                "Channel: geometric mode requires at least one enabled path");
-        }
-        r_min_anchor_len_m_ = paths_rmin[0].length_m;
-        const double sound_speed = clamp_sound_speed(config_.sound_speed_m_s);
-        base_delay_samples_ = static_cast<size_t>(
-            std::round(static_cast<double>(r_min_anchor_len_m_) /
-                       sound_speed * sample_rate_));
-
-        // Worst-case tap excess: longest path at r_max minus the r_min
-        // anchor. Drives PairBuffer sizing.
-        std::array<PathTap, 5> paths_rmax{};
-        const std::size_t n_rmax = scene_->compute_paths(
-            config_.geometry.r_max_m, paths_rmax);
-        if (n_rmax == 0) {
-            throw std::invalid_argument(
-                "Channel: geometric mode requires at least one enabled path "
-                "at r_max");
-        }
-        const float worst_len = paths_rmax[n_rmax - 1].length_m;
-        const float worst_excess_s = std::max(
-            0.0f, (worst_len - r_min_anchor_len_m_) /
-                  static_cast<float>(sound_speed));
-        max_tap_delta_samples_ = static_cast<size_t>(
-            std::round(worst_excess_s * sample_rate_));
-
-        // Path count is stable across blocks; size once using max(n_rmin,
-        // n_rmax) for safety.
-        const std::size_t tap_count = std::max(n_rmin, n_rmax);
-        taps_.assign           (tap_count, ResolvedTap{0.0, 0.0f, 0.0f});
-        geom_taps_start_.assign(tap_count, ResolvedTap{0.0, 0.0f, 0.0f});
-        geom_taps_end_  .assign(tap_count, ResolvedTap{0.0, 0.0f, 0.0f});
-        tap_states_     .assign(tap_count, dsp::TapState{});
-
-        // SourceDelayLine sizing. Worst-case read-back behind the producer
-        // is the longest enabled path's excess at the worst R in
-        // [r_min, r_max] (strong reflections can put it at r_min, so check
-        // both). Adds Catmull-Rom margin (4), clock-drift margin (one
-        // block at configured PPM), and PROCESSING_BLOCK_SIZE for samples
-        // written this block but not yet read.
-        const double rmin_worst_excess_s = std::max(0.0,
-            (static_cast<double>(paths_rmin[n_rmin - 1].length_m) -
-             static_cast<double>(r_min_anchor_len_m_)) / sound_speed);
-        const double rmax_worst_excess_s = std::max(0.0,
-            (static_cast<double>(worst_len) -
-             static_cast<double>(r_min_anchor_len_m_)) / sound_speed);
-        const size_t rmin_worst_samples = static_cast<size_t>(
-            std::ceil(rmin_worst_excess_s * sample_rate_));
-        const size_t rmax_worst_samples = static_cast<size_t>(
-            std::ceil(rmax_worst_excess_s * sample_rate_));
-        const size_t worst_excess_samples =
-            std::max(rmin_worst_samples, rmax_worst_samples);
-        constexpr size_t catmull_rom_margin = 4;
-        const double clock_drift_per_block =
-            static_cast<double>(PROCESSING_BLOCK_SIZE) *
-            std::abs(static_cast<double>(config_.clock_offset_ppm)) * 1e-6;
-        const size_t clock_drift_margin =
-            static_cast<size_t>(std::ceil(clock_drift_per_block)) + 1;
-        const size_t sdl_min_capacity = worst_excess_samples
-            + catmull_rom_margin + clock_drift_margin + PROCESSING_BLOCK_SIZE;
-        source_delay_line_.resize(sdl_min_capacity);
-
-        per_tap_scratch_.assign(PROCESSING_BLOCK_SIZE, 0.0f);
+        init_read_style_buffers(source->tap_count_max(),
+                                source->sdl_worst_excess_samples());
 
         spdlog::info(
             "Channel {} → {}: mode=geometric, AFE_dB={:.2f}, "
@@ -149,15 +108,64 @@ Channel::Channel(const ChannelConfig&   config,
             "max_tap_delta={} (worst-path at r_max={:.1f}m), "
             "source_delay_line_capacity={}",
             config_.from_modem, config_.to_modem,
-            total_db, source_center_fc_hz_ / 1000.0,
-            base_delay_samples_, config_.geometry.r_min_m, r_min_anchor_len_m_,
+            total_db, source_cal.center_freq_hz / 1000.0,
+            base_delay_samples_, config_.geometry.r_min_m,
+            source->r_min_anchor_len_m(),
             max_tap_delta_samples_, config_.geometry.r_max_m,
             source_delay_line_.capacity());
 
-        // Geometric mode bypasses scatter_taps(); these scratches are
-        // unused but cheap to keep allocated.
-        resample_buf_.assign(PROCESSING_BLOCK_SIZE, 0.0f);
-        gained_buf_  .assign(PROCESSING_BLOCK_SIZE, 0.0f);
+        tap_source_ = std::move(source);
+        return;
+    }
+
+    // Replay mode: the acoustic path structure (delays, relative gains)
+    // comes from the recorded trajectory file. Only the AFE-electrical
+    // chain and the additive gain_db trim / receive boost multiply on top
+    // — spreading/absorption are baked into the measured gains.
+    if (config_.mode == ChannelMode::Replay) {
+        const double afe_chain_db = dsp::compute_channel_afe_chain_gain_db(
+            source_cal, receiver_cal,
+            source_transducer, receiver_transducer,
+            config_.rx_atten_idx);
+        const double total_db = afe_chain_db
+            + static_cast<double>(config_.gain_db)
+            + static_cast<double>(receive_boost_db);
+        afe_chain_gain_ = static_cast<float>(std::pow(10.0, total_db / 20.0));
+
+        // Init-time file I/O; a malformed/missing file fails scenario
+        // startup with TapTrajectoryError.
+        auto source = std::make_unique<ReplayTapSource>(
+            TapTrajectory::load(config_.replay.trajectory_path),
+            config_.replay, sample_rate_,
+            config_.from_modem + " → " + config_.to_modem);
+        max_tap_delta_samples_ = source->max_tap_delta_samples();
+
+        // Base propagation delay as in static mode: propagation_delay_s
+        // overrides the range-derived delay (trajectory delays are excess
+        // over this).
+        const double sound_speed = clamp_sound_speed(config_.sound_speed_m_s);
+        const double base_delay_seconds =
+            (config_.propagation_delay_s >= 0.0f)
+                ? static_cast<double>(config_.propagation_delay_s)
+                : static_cast<double>(config_.range_m) / sound_speed;
+        base_delay_samples_ = static_cast<size_t>(
+            std::round(base_delay_seconds * sample_rate_));
+
+        init_read_style_buffers(source->tap_count_max(),
+                                max_tap_delta_samples_);
+
+        spdlog::info(
+            "Channel {} → {}: mode=replay, AFE_dB={:.2f}, file='{}' "
+            "(taps={}, dt={:.1f}ms, duration={:.2f}s, fc_meas={:.1f}kHz), "
+            "base_delay={}, max_tap_delta={}, source_delay_line_capacity={}",
+            config_.from_modem, config_.to_modem,
+            total_db, config_.replay.trajectory_path,
+            source->tap_count_max(), source->dt_s() * 1000.0,
+            source->duration_s(), source->fc_meas_hz() / 1000.0,
+            base_delay_samples_, max_tap_delta_samples_,
+            source_delay_line_.capacity());
+
+        tap_source_ = std::move(source);
         return;
     }
 
@@ -256,12 +264,10 @@ void Channel::on_message_start(PairBuffer& pair_buffer,
     if (needs_hilbert_) hilbert_.reset();
     source_samples_processed_ = 0;
 
-    if (geometric_) {
-        // Snapshot R_0 and populate taps_ at t=0; process() refreshes
-        // start/end taps each block.
-        initial_range_m_ = (config_.initial_range_m > 0.0f)
-            ? config_.initial_range_m : config_.range_m;
-        recompute_geometric_taps(initial_range_m_);
+    if (tap_source_) {
+        // Pin the source's time origin (e.g. snapshot R_0); process()
+        // refreshes start/end taps each block.
+        tap_source_->on_message_start();
 
         // Clear the SourceDelayLine so initial reads through the
         // Catmull-Rom margin see zero, not leftover prior-message samples.
@@ -277,47 +283,9 @@ void Channel::on_message_start(PairBuffer& pair_buffer,
 
 Channel::~Channel() = default;
 
-void Channel::recompute_geometric_taps_into(
-    float range_m, std::vector<ResolvedTap>& dst) const {
-    if (!scene_) return;
-
-    // Clamp to the configured envelope rather than throwing — sized
-    // PairBuffer / SourceDelayLine assume reads stay in that window.
-    const float r_clamped = std::clamp(range_m,
-        config_.geometry.r_min_m, config_.geometry.r_max_m);
-
-    std::array<PathTap, 5> paths{};
-    const std::size_t n = scene_->compute_paths(r_clamped, paths);
-
-    // Path count is stable across blocks; resize defensively in case the
-    // scene's enable flags change at runtime.
-    if (dst.size() != n) dst.assign(n, ResolvedTap{0.0, 0.0f, 0.0f});
-
-    for (std::size_t i = 0; i < n; ++i) {
-        const auto rp = scene_->resolve(paths[i], r_min_anchor_len_m_,
-                                         source_center_fc_hz_,
-                                         saltwater_,
-                                         static_cast<float>(sample_rate_));
-        dst[i].delta_samples_frac = rp.delta_samples_frac;
-        dst[i].gain               = rp.gain_linear * afe_chain_gain_;
-        dst[i].gain_imag          = 0.0f;
-    }
-}
-
-void Channel::recompute_geometric_taps(float range_m) {
-    recompute_geometric_taps_into(range_m, taps_);
-}
-
-float Channel::range_at_source_time(double t_seconds) const {
-    const double v = static_cast<double>(config_.velocity_radial_m_s);
-    const double a = static_cast<double>(config_.acceleration_radial_m_s2);
-    return static_cast<float>(
-        static_cast<double>(initial_range_m_) + v * t_seconds + 0.5 * a * t_seconds * t_seconds);
-}
-
 void Channel::on_message_end(PairBuffer& pair_buffer) {
-    if (geometric_) {
-        drain_geometric_tail(pair_buffer);
+    if (tap_source_) {
+        drain_tap_source_tail(pair_buffer);
         return;
     }
 
@@ -340,8 +308,8 @@ size_t Channel::process(const float* samples, size_t count,
                         PairBuffer& pair_buffer) {
     if (count == 0) return 0;
 
-    if (geometric_) {
-        return process_geometric(samples, count, pair_buffer);
+    if (tap_source_) {
+        return process_tap_source(samples, count, pair_buffer);
     }
 
     // Refresh ratio from intra-message elapsed time so radial acceleration
@@ -380,7 +348,7 @@ size_t Channel::process(const float* samples, size_t count,
     return total_consumed;
 }
 
-size_t Channel::process_geometric(const float* samples, size_t count,
+size_t Channel::process_tap_source(const float* samples, size_t count,
                                    PairBuffer& pair_buffer) {
     // 1:1 source-rate write.
     source_delay_line_.write(samples, count);
@@ -404,14 +372,13 @@ size_t Channel::process_geometric(const float* samples, size_t count,
         const double t_end =
             static_cast<double>(pair_buffer_out_cursor_ + n_out) / Fs_recv;
 
-        recompute_geometric_taps_into(
-            range_at_source_time(t_start), geom_taps_start_);
-        recompute_geometric_taps_into(
-            range_at_source_time(t_end),   geom_taps_end_);
+        const size_t n_start = tap_source_->taps_at(
+            t_start, taps_start_buf_.data(), taps_start_buf_.size());
+        const size_t n_end   = tap_source_->taps_at(
+            t_end,   taps_end_buf_.data(),   taps_end_buf_.size());
 
-        // Defensive: path count is stable across endpoints by construction.
-        const size_t n_taps = std::min(geom_taps_start_.size(),
-                                        geom_taps_end_.size());
+        // Defensive: tap count is stable across endpoints by contract.
+        const size_t n_taps = std::min(n_start, n_end);
 
         // Bake per-block clock drift into each tap's end-delay so the
         // PerTapFarrow inner loop stays uniform.
@@ -420,12 +387,14 @@ size_t Channel::process_geometric(const float* samples, size_t count,
 
         for (size_t k = 0; k < n_taps; ++k) {
             tap_states_[k].tap_delay_samples_at_block_start =
-                geom_taps_start_[k].delta_samples_frac;
+                taps_start_buf_[k].delta_samples_frac;
             tap_states_[k].tap_delay_samples_at_block_end =
-                geom_taps_end_[k].delta_samples_frac
+                taps_end_buf_[k].delta_samples_frac
                 - clock_drift_per_block;
-            tap_states_[k].amplitude_at_block_start = geom_taps_start_[k].gain;
-            tap_states_[k].amplitude_at_block_end   = geom_taps_end_[k].gain;
+            tap_states_[k].amplitude_at_block_start =
+                taps_start_buf_[k].gain * afe_chain_gain_;
+            tap_states_[k].amplitude_at_block_end   =
+                taps_end_buf_[k].gain * afe_chain_gain_;
 
             dsp::PerTapFarrow::produce(
                 source_delay_line_,
@@ -452,7 +421,7 @@ size_t Channel::process_geometric(const float* samples, size_t count,
     return count;
 }
 
-void Channel::drain_geometric_tail(PairBuffer& pair_buffer) {
+void Channel::drain_tap_source_tail(PairBuffer& pair_buffer) {
     if (max_tap_delta_samples_ == 0) return;
 
     // Feed zeros so per-tap Farrow reads post-message silence once the
@@ -468,14 +437,15 @@ void Channel::drain_geometric_tail(PairBuffer& pair_buffer) {
     size_t remaining = tail;
     while (remaining > 0) {
         const size_t chunk = std::min<size_t>(PROCESSING_BLOCK_SIZE, remaining);
-        process_geometric(zeros.data(), chunk, pair_buffer);
+        process_tap_source(zeros.data(), chunk, pair_buffer);
         remaining -= chunk;
     }
 }
 
 size_t Channel::input_needed_for_batch() const {
-    if (geometric_) {
-        // No bulk Farrow in geometric mode: input-needed is exactly one block.
+    if (tap_source_) {
+        // No bulk Farrow in read-style modes: input-needed is exactly one
+        // block.
         return PROCESSING_BLOCK_SIZE;
     }
     return resampler_.input_needed(resample_buf_.size());

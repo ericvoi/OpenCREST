@@ -66,10 +66,16 @@ openCREST_unit_test(test_receiver_mix       unit/test_receiver_mix.cpp)
 openCREST_unit_test(test_source_worker      unit/test_source_worker.cpp)
 openCREST_unit_test(test_channel_engine_sizing unit/test_channel_engine_sizing.cpp)
 openCREST_unit_test(test_geometric_scene    unit/test_geometric_scene.cpp)
+openCREST_unit_test(test_geometric_tap_source unit/test_geometric_tap_source.cpp)
+openCREST_unit_test(test_replay_tap_source  unit/test_replay_tap_source.cpp)
+openCREST_unit_test(test_channel_replay     unit/test_channel_replay.cpp)
 openCREST_unit_test(test_channel_geometric  unit/test_channel_geometric.cpp)
 openCREST_unit_test(test_source_delay_line  unit/test_source_delay_line.cpp)
 openCREST_unit_test(test_per_tap_farrow     unit/test_per_tap_farrow.cpp)
 openCREST_unit_test(test_processing_time_stats unit/test_processing_time_stats.cpp)
+openCREST_unit_test(test_tap_trajectory     unit/test_tap_trajectory.cpp)
+target_compile_definitions(test_tap_trajectory
+    PRIVATE OPENCREST_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 openCREST_unit_test(test_run_summary        unit/test_run_summary.cpp)
 
 # ---------------------------------------------------------------------------
@@ -78,6 +84,8 @@ openCREST_unit_test(test_run_summary        unit/test_run_summary.cpp)
 openCREST_integration_test(test_channel_pipeline   integration/test_channel_pipeline.cpp)
 openCREST_integration_test(test_channel_geometric_doppler
                             integration/test_channel_geometric_doppler.cpp)
+openCREST_integration_test(test_channel_replay_doppler
+                            integration/test_channel_replay_doppler.cpp)
 openCREST_integration_test(test_state_transitions  integration/test_state_transitions.cpp)
 openCREST_integration_test(test_loopback_mock      integration/test_loopback_mock.cpp)
 openCREST_integration_test(test_scenario_files     integration/test_scenario_files.cpp)

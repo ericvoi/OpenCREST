@@ -84,3 +84,39 @@ TEST(ChannelEngineSizing, RegressionLoopbackTruncationAt2_1Seconds) {
     EXPECT_GT(cap, static_cast<size_t>(1'048'576))
         << "Pair buffer capacity must exceed the 2^20 ceiling.";
 }
+
+// Replay channels: extent = base_delay (range or propagation_delay_s
+// override) + the trajectory's max excess delay (loader-populated).
+
+TEST(ChannelEngineSizing, ReplayExtentUsesTrajectoryMaxDelay) {
+    constexpr uint32_t kFs = 500'000;
+    auto sc = make_loopback(/*range_m=*/150.0f, /*max_msg_dur_s=*/3.0f);
+    sc.channels[0].multipath_taps.clear();
+    sc.channels[0].mode               = ChannelMode::Replay;
+    sc.channels[0].range_m            = 800.0f;
+    sc.channels[0].replay.max_delay_s = 0.128;
+
+    const size_t cap = ChannelEngine::worst_case_pair_capacity(sc, kFs);
+
+    const size_t base      = static_cast<size_t>(800.0f * kFs / 1500.0f);
+    const size_t mp        = static_cast<size_t>(std::ceil(0.128 * kFs));
+    const size_t in_flight = static_cast<size_t>(3.0f * kFs);
+    EXPECT_GE(cap, base + mp + in_flight);
+}
+
+TEST(ChannelEngineSizing, ReplayExtentHonorsPropagationDelayOverride) {
+    constexpr uint32_t kFs = 500'000;
+    auto sc = make_loopback(150.0f, 3.0f);
+    sc.channels[0].multipath_taps.clear();
+    sc.channels[0].mode                = ChannelMode::Replay;
+    sc.channels[0].range_m             = 150.0f;
+    sc.channels[0].propagation_delay_s = 2.0f;   // >> range-derived delay
+    sc.channels[0].replay.max_delay_s  = 0.050;
+
+    const size_t cap = ChannelEngine::worst_case_pair_capacity(sc, kFs);
+
+    const size_t base      = static_cast<size_t>(2.0f * kFs);
+    const size_t mp        = static_cast<size_t>(std::ceil(0.050 * kFs));
+    const size_t in_flight = static_cast<size_t>(3.0f * kFs);
+    EXPECT_GE(cap, base + mp + in_flight);
+}

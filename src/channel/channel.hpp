@@ -10,10 +10,9 @@
 #include "dsp/per_tap_farrow.hpp"
 #include "dsp/source_delay_line.hpp"
 #include "channel/pair_buffer.hpp"
+#include "channel/tap_source.hpp"
 
 namespace openCREST {
-
-class GeometricScene;
 
 // Single directed acoustic path: one source modem -> one receiver modem.
 //
@@ -40,8 +39,6 @@ public:
             const TransducerSpec&  receiver_transducer,
             float                  receive_boost_db = 0.0f);
 
-    // Out-of-line so std::unique_ptr<GeometricScene> can use the forward
-    // declaration above.
     ~Channel();
 
     // Source modem entered TX. Resets Farrow state, recomputes the Doppler
@@ -106,24 +103,20 @@ private:
                       const float* farrow_out, size_t n,
                       PairBuffer& pair_buffer);
 
-    // Refresh `dst` from the geometric scene at horizontal range R.
-    void recompute_geometric_taps_into(float range_m,
-                                        std::vector<ResolvedTap>& dst) const;
-
-    // Refresh taps_ in place.
-    void recompute_geometric_taps(float range_m);
-
-    // Geometric branch of process(): writes source samples 1:1 into
-    // source_delay_line_ and produces receiver-rate output via per-tap
-    // PerTapFarrow reads. Returns input consumed (== count).
-    size_t process_geometric(const float* samples, size_t count,
+    // Read-style branch of process() (geometric / replay): writes source
+    // samples 1:1 into source_delay_line_ and produces receiver-rate output
+    // via per-tap PerTapFarrow reads, with tap states supplied by
+    // tap_source_ at block start/end. Returns input consumed (== count).
+    size_t process_tap_source(const float* samples, size_t count,
                               PairBuffer& pair_buffer);
 
-    // Drain the geometric tail with zero input.
-    void drain_geometric_tail(PairBuffer& pair_buffer);
+    // Drain the read-style multipath tail with zero input.
+    void drain_tap_source_tail(PairBuffer& pair_buffer);
 
-    // R(t) = R_0 + v*t + 0.5*a*t^2. Geometric mode only.
-    float range_at_source_time(double t_seconds) const;
+    // Size the read-style scratch buffers and the SourceDelayLine
+    // (worst-case excess + Catmull-Rom, clock-drift, and block margins).
+    void init_read_style_buffers(size_t tap_count,
+                                 size_t sdl_worst_excess_samples);
 
     ChannelConfig            config_;
     dsp::FarrowResampler     resampler_;
@@ -140,18 +133,13 @@ private:
     // Per-message state (reset by on_message_start).
     size_t source_samples_processed_ = 0;
 
-    // Geometric-mode state (zero/null in static mode). Range evolves as
-    // R(t) = initial_range_m + v*t + 0.5*a*t^2; tap delays/gains are
-    // recomputed each block from R(t). The Farrow ratio in geometric mode
-    // carries only the crystal-clock offset — the (1 + v/c) shift emerges
-    // naturally from time-varying tap deltas.
-    std::unique_ptr<GeometricScene> scene_;
-    float  initial_range_m_      = 0.0f;             // R_0 snapshot at message start
-    float  source_center_fc_hz_  = 0.0f;
-    bool   saltwater_            = true;
+    // Read-style tap provider (geometric / replay modes); null in static
+    // mode. Tap delays/gains are re-queried each block at the block's
+    // start/end times. The Farrow ratio in these modes carries only the
+    // crystal-clock offset — the (1 + v/c) shift emerges naturally from
+    // time-varying tap deltas.
+    std::unique_ptr<TapSource> tap_source_;
     float  afe_chain_gain_       = 1.0f;             // AFE-only linear scalar
-    float  r_min_anchor_len_m_   = 0.0f;             // shortest enabled path at r_min
-    bool   geometric_            = false;
 
     // Pre-allocated scratch.
     std::vector<float> resample_buf_;       // Farrow output, one batch
@@ -159,13 +147,13 @@ private:
     std::vector<float> hilbert_buf_;        // sized only when needs_hilbert_
     std::vector<float> delayed_real_buf_;   // sized only when needs_hilbert_
 
-    // Geometric-mode read-style state. Source samples land 1:1 in
+    // Read-style state (tap_source_ modes). Source samples land 1:1 in
     // source_delay_line_; each tap's PerTapFarrow reads at a fractional
     // position evolving across the block, so per-tap Doppler emerges
     // without invoking the bulk FarrowResampler.
     dsp::SourceDelayLine        source_delay_line_;
-    std::vector<ResolvedTap>    geom_taps_start_;
-    std::vector<ResolvedTap>    geom_taps_end_;
+    std::vector<SourcedTap>     taps_start_buf_;
+    std::vector<SourcedTap>     taps_end_buf_;
     std::vector<dsp::TapState>  tap_states_;
     std::vector<float>          per_tap_scratch_;
     // Receiver-rate output cursor for the current message.

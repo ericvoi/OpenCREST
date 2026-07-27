@@ -10,11 +10,12 @@ namespace {
 
 // One candidate path indexed by vertical offset dz: l = sqrt(R^2 + dz^2).
 struct Candidate {
+    int   order;          // reflection count (bounces)
     float dz;
     float gamma_product;
     bool  has_surface;
     bool  has_bottom;
-    bool  enabled;
+    bool  enabled;        // individual toggle (orders 0-2); true otherwise
 };
 
 float clamp_sound_speed_geom(float c) {
@@ -28,23 +29,39 @@ GeometricScene::GeometricScene(const GeometricSceneConfig& geom,
     : geom_(geom), env_(env) {}
 
 std::size_t GeometricScene::compute_paths(float range_m,
-                                          std::array<PathTap, 5>& out) const {
+                                          std::array<PathTap, MAX_GEOMETRIC_PATHS>& out) const {
     const float zs = geom_.source_depth_m;
     const float zr = geom_.receiver_depth_m;
     const float D  = geom_.water_depth_m;
+    const float gs = geom_.gamma_surface;
+    const float gb = geom_.gamma_bottom;
+    const int   max_b = std::clamp(geom_.max_bounces, 0, kMaxImageOrder);
 
-    // Paper eq.(1): image-method dz per path.
-    const std::array<Candidate, 5> candidates{{
-        { zs - zr,                       1.0f,                                   false, false, geom_.enable_direct },
-        { zs + zr,                       geom_.gamma_surface,                    true,  false, geom_.enable_surface },
-        { (D - zs) + (D - zr),           geom_.gamma_bottom,                     false, true,  geom_.enable_bottom },
-        { (2.0f * D - zs) + zr,          geom_.gamma_surface * geom_.gamma_bottom, true, true,  geom_.enable_surface_bottom },
-        { zs + (2.0f * D - zr),          geom_.gamma_bottom * geom_.gamma_surface, true, true,  geom_.enable_bottom_surface },
+    // Image-method arrivals grouped by reflection order n. dz is the vertical
+    // image offset; l = sqrt(R^2 + dz^2). Orders 0-2 keep their individual
+    // enable flags for back-compatibility (the classic five paths); orders
+    // 3-4 are gated only by max_bounces. Reflection product carries the
+    // surface (gs) and bottom (gb) coefficients once per corresponding bounce.
+    const std::array<Candidate, MAX_GEOMETRIC_PATHS> candidates{{
+        // order 0 — direct
+        { 0, zs - zr,             1.0f,          false, false, geom_.enable_direct },
+        // order 1 — one bounce
+        { 1, zs + zr,             gs,            true,  false, geom_.enable_surface },
+        { 1, 2.0f*D - zs - zr,    gb,            false, true,  geom_.enable_bottom },
+        // order 2 — surface-bottom / bottom-surface
+        { 2, 2.0f*D - zs + zr,    gs*gb,         true,  true,  geom_.enable_surface_bottom },
+        { 2, 2.0f*D + zs - zr,    gs*gb,         true,  true,  geom_.enable_bottom_surface },
+        // order 3 — surface-bottom-surface / bottom-surface-bottom
+        { 3, 2.0f*D + zs + zr,    gs*gs*gb,      true,  true,  true },
+        { 3, 4.0f*D - zs - zr,    gs*gb*gb,      true,  true,  true },
+        // order 4 — four bounces
+        { 4, 4.0f*D + zs - zr,    gs*gs*gb*gb,   true,  true,  true },
+        { 4, 4.0f*D - zs + zr,    gs*gs*gb*gb,   true,  true,  true },
     }};
 
     std::size_t n = 0;
     for (const auto& c : candidates) {
-        if (!c.enabled) continue;
+        if (c.order > max_b || !c.enabled) continue;
         PathTap& t = out[n++];
         t.length_m           = std::sqrt(range_m * range_m + c.dz * c.dz);
         t.reflection_product = c.gamma_product;

@@ -20,7 +20,11 @@ required.
 - A Python experiment harness (`experiments/`) drives the simulator across
   parameter sweeps, captures structured outputs (run-summary JSON, message
   events, WAVs, CDC logs), and renders figures.
-- 380 unit/integration tests link against `openCREST_core` and run without
+- Channel replay: measured time-varying impulse responses (e.g. from the
+  Watermark dataset) convert offline to tap-trajectory files
+  (`experiments/convert_watermark.py`) and replay through the per-tap
+  fractional-delay pipeline (`mode: replay`, see `scenarios/replay_example.yaml`).
+- 444 unit/integration tests link against `openCREST_core` and run without
   USB hardware.
 
 ## Build
@@ -111,7 +115,8 @@ src/
 │                  noise PSD, physical gain, calibration math, transducer
 │                  response
 ├── channel/      PairBuffer, Channel pipeline, SourceWorker, ReceiverMix,
-│                  ChannelEngine, geometric scene (range-dependent taps)
+│                  ChannelEngine, tap sources (geometric scene, replay
+│                  trajectories)
 ├── protocol/     Wire formats + codec for data and control packets
 ├── transport/    IModemTransport interface; UsbTransport (libusb) and
 │                  MockTransport (testing)
