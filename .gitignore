@@ -15,3 +15,5 @@ __pycache__/
 .venv/
 OpenAquatix-Firmware
 datasets/
+paper.txt
+spec.md
