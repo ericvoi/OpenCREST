@@ -1,6 +1,11 @@
 #include "config/scenario_loader.hpp"
 #include "core/constants.hpp"
-#include "core/tap_trajectory.hpp"
+// Per-model validation still lives in this loader (geometric bounce limits,
+// replay .octt header sizing), so it reaches into those models' headers. That
+// coupling is what moving parse+validate into the model plugins resolves; the
+// includes mark exactly where it is.
+#include "channel/model/geometric/geometric_constants.hpp"
+#include "channel/model/replay/tap_trajectory.hpp"
 #include <yaml-cpp/yaml.h>
 #include <cmath>
 #include <cstdint>
@@ -389,13 +394,13 @@ ScenarioConfig parse(const YAML::Node& root, const std::string& source,
                 }
             }
 
-            // Validate the file header and lift the sizing fields the
-            // ChannelEngine needs, so PairBuffer sizing does no file I/O.
+            // Validate the file header now so a missing or malformed
+            // trajectory fails at scenario load, with the offending channel
+            // named, rather than later inside ChannelEngine construction.
+            // The header is not retained: the replay model reads the file
+            // itself and reports its own tap extent to the engine.
             try {
-                const auto hdr =
-                    TapTrajectory::peek_header(cc.replay.trajectory_path);
-                cc.replay.max_delay_s = hdr.max_delay_s;
-                cc.replay.tap_count   = hdr.tap_count;
+                (void) TapTrajectory::peek_header(cc.replay.trajectory_path);
             } catch (const TapTrajectoryError& e) {
                 throw ScenarioLoadError(source + ": channel[" + std::to_string(i) +
                     "] replay trajectory: " + e.what());

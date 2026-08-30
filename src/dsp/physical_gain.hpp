@@ -61,10 +61,11 @@ namespace openCREST::dsp {
 }
 
 // AFE-electrical chain only — same as compute_channel_physical_gain_db
-// minus the −TL term. Used by geometric-mode Channel where the
-// geometric scene supplies the per-path spreading + Thorp factor and
-// only the frequency-independent electronics chain (V_ref, TX/RX pads,
-// TVR, RVR) multiplies on top.
+// minus the −TL term. Used by the tap-based channel models (geometric,
+// replay), whose tap gains already carry spreading and absorption — from
+// the scene per path, or baked into the measured trajectory — so only the
+// frequency-independent electronics chain (V_ref, TX/RX pads, TVR, RVR)
+// multiplies on top.
 [[nodiscard]] inline double compute_channel_afe_chain_gain_db(
         const CalibrationData& src_cal,
         const CalibrationData& rx_cal,

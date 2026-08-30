@@ -1,23 +1,15 @@
 #include "channel/channel_engine.hpp"
-#include "channel/geometric_scene.hpp"
 #include "core/constants.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <stdexcept>
-#include <unordered_map>
 
 #include <spdlog/spdlog.h>
 
 namespace openCREST {
 
 namespace {
-
-struct PairKey {
-    size_t channel_idx;
-    size_t receiver_idx;
-};
 
 double clamp_sound_speed_engine(float speed) {
     return (speed > 0.0f) ? static_cast<double>(speed) : 1500.0;
@@ -32,60 +24,16 @@ size_t ChannelEngine::modem_index(const std::string& id) const {
     throw std::invalid_argument("ChannelEngine: unknown modem id '" + id + "'");
 }
 
-size_t ChannelEngine::worst_case_pair_capacity(const ScenarioConfig& scenario,
-                                                uint32_t sample_rate) {
+size_t ChannelEngine::pair_capacity_for_extent(size_t                worst_channel_extent,
+                                               const ScenarioConfig& scenario,
+                                               uint32_t              sample_rate) {
     const double sound_speed = clamp_sound_speed_engine(
         scenario.environment.sound_speed_m_s);
 
-    // Per-channel max write-offset (base_delay + multipath tail).
-    // Static channels: `range_m + MAX_MULTIPATH_DELAY_S`.
-    // Geometric channels: longest_path_at_r_max (since Channel anchors
-    // base_delay at direct_path_at_r_min and max_tap_delta covers up to
-    // longest_path_at_r_max minus that anchor).
-    // Replay channels: base_delay + the trajectory's max excess delay
-    // (lifted from the .octt header by the scenario loader).
-    size_t worst_channel_extent = 0;
-
-    for (const auto& cc : scenario.channels) {
-        size_t extent = 0;
-
-        if (cc.mode == ChannelMode::Replay) {
-            const double base_delay_seconds =
-                (cc.propagation_delay_s >= 0.0f)
-                    ? static_cast<double>(cc.propagation_delay_s)
-                    : static_cast<double>(cc.range_m) / sound_speed;
-            const size_t base = static_cast<size_t>(std::round(
-                base_delay_seconds * sample_rate));
-            const size_t mp = static_cast<size_t>(std::ceil(
-                cc.replay.max_delay_s * sample_rate));
-            extent = base + mp;
-        } else if (cc.mode == ChannelMode::Geometric) {
-            // Transient scene used only to query worst path length at r_max.
-            EnvironmentConfig env;
-            env.sound_speed_m_s = scenario.environment.sound_speed_m_s;
-            env.saltwater       = scenario.environment.saltwater;
-            GeometricScene scene(cc.geometry, env);
-            std::array<PathTap, MAX_GEOMETRIC_PATHS> paths_rmax{};
-            const std::size_t n = scene.compute_paths(
-                cc.geometry.r_max_m, paths_rmax);
-            const float longest_at_rmax = (n > 0)
-                ? paths_rmax[n - 1].length_m : cc.range_m;
-            extent = static_cast<size_t>(std::round(
-                static_cast<double>(longest_at_rmax) * sample_rate / sound_speed));
-        } else {
-            const float r = cc.range_m;
-            const size_t base = static_cast<size_t>(std::round(
-                static_cast<double>(r) * sample_rate / sound_speed));
-            const size_t mp = static_cast<size_t>(std::round(
-                MAX_MULTIPATH_DELAY_S * sample_rate));
-            extent = base + mp;
-        }
-        worst_channel_extent = std::max(worst_channel_extent, extent);
-    }
-
-    // environment.max_range_m is a floor for the static-style budget;
-    // lets scenarios reserve memory for ranges larger than any declared
-    // channel. Geometric channels are bounded by their own r_max above.
+    // Environment-level floor: a scenario may declare a worst-case range that
+    // exceeds any individual channel's configured extent (e.g. modems that
+    // move further apart than range_m suggests). Range-derived, plus the
+    // multipath allowance the scenario loader caps tap delays at.
     if (scenario.environment.max_range_m > 0.0f) {
         const size_t env_base = static_cast<size_t>(std::round(
             static_cast<double>(scenario.environment.max_range_m) *
@@ -98,7 +46,7 @@ size_t ChannelEngine::worst_case_pair_capacity(const ScenarioConfig& scenario,
 
     // In-flight slack: hold an entire max-duration message because the
     // receiver does not drain while its modem is in TX (half-duplex) or
-    // while its pull-thread is otherwise idle. Falls back to 10 s.
+    // while its pull-thread is otherwise idle.
     float msg_dur_s = scenario.environment.max_message_duration_s;
     if (!(msg_dur_s > 0.0f)) msg_dur_s = 10.0f;
     const size_t in_flight = static_cast<size_t>(
@@ -116,12 +64,9 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
     }
 
     const uint32_t sample_rate = modems_[0].sample_rate;
-    const size_t   pair_cap    = worst_case_pair_capacity(scenario, sample_rate);
 
     // Resolve each modem's TransducerSpec. Loader guarantees every
-    // transducer_id resolves; test fixtures bypassing the loader fall
-    // back to an identity TransducerSpec so the physical-gain math
-    // collapses to -TL.
+    // transducer_id resolves
     std::vector<TransducerSpec> transducer_per_modem(modems_.size());
     for (size_t i = 0; i < modems_.size(); ++i) {
         for (const auto& mc : scenario.modems) {
@@ -143,41 +88,65 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
 
     pair_buffers_.reserve(scenario.channels.size());
 
+    // Pass 1: build every Channel and let each report its own write extent.
+    // Whichever propagation model a channel uses, the extent arrives through
+    // the same accessor — the engine never inspects cc.mode.
+    struct BuiltChannel {
+        std::unique_ptr<Channel> channel;
+        size_t                   src_idx;
+        size_t                   rcv_idx;
+    };
+    std::vector<BuiltChannel> built;
+    built.reserve(scenario.channels.size());
+
+    size_t worst_channel_extent = 0;
     for (const auto& cc : scenario.channels) {
         const size_t src_idx = modem_index(cc.from_modem);
         const size_t rcv_idx = modem_index(cc.to_modem);
 
-        // Build channel first so we can read its base_delay.
-        // The receiver's boost (not the source's) applies — boost
-        // preserves SNR at the receiver, so signal and noise must scale
-        // together.
+        // The receiver's boost (not the source's) applies. Boost preserves
+        // SNR at the receiver, so signal and noise must scale together
+        // equally.
         auto channel = std::make_unique<Channel>(cc,
-                                                  modems_[src_idx].calibration,
-                                                  modems_[rcv_idx].calibration,
-                                                  transducer_per_modem[src_idx],
-                                                  transducer_per_modem[rcv_idx],
-                                                  modems_[rcv_idx].receive_boost_db);
-        const double prop_delay_s   = channel->propagation_delay_seconds();
-        const uint32_t receiver_fs  = modems_[rcv_idx].sample_rate;
+                                                 modems_[src_idx].calibration,
+                                                 modems_[rcv_idx].calibration,
+                                                 transducer_per_modem[src_idx],
+                                                 transducer_per_modem[rcv_idx],
+                                                 modems_[rcv_idx].receive_boost_db);
+
+        worst_channel_extent = std::max(worst_channel_extent,
+                                        channel->write_extent_samples());
+
+        built.push_back({std::move(channel), src_idx, rcv_idx});
+    }
+
+    const size_t pair_cap = pair_capacity_for_extent(worst_channel_extent,
+                                                     scenario, sample_rate);
+
+    // Pass 2: size one PairBuffer per channel and wire the graph.
+    for (auto& bc : built) {
+        const double   prop_delay_s = bc.channel->propagation_delay_seconds();
+        const uint32_t receiver_fs  = modems_[bc.rcv_idx].sample_rate;
 
         // Propagation-delay backbone for this directed pair.
-        auto pair = std::make_unique<PairBuffer>(pair_cap,
-                                                  channel->base_delay_samples());
+        auto pair = std::make_unique<PairBuffer>(
+            pair_cap, bc.channel->base_delay_samples());
         PairBuffer* pair_raw = pair.get();
         pair_buffers_.push_back(std::move(pair));
 
         // Receiver-side fields wired later via wire_modem_trackers; record
         // a back-pointer so the wiring step can find this entry.
         SourceWorker::Outgoing og;
-        og.channel              = std::move(channel);
+        og.channel              = std::move(bc.channel);
         og.pair_buffer          = pair_raw;
         og.receiver_sample_rate = receiver_fs;
         og.propagation_delay_s  = prop_delay_s;
-        per_source_outgoing[src_idx].push_back(std::move(og));
-        const size_t outgoing_idx = per_source_outgoing[src_idx].size() - 1;
-        per_receiver_outgoing_refs_[rcv_idx].push_back({src_idx, outgoing_idx});
+        per_source_outgoing[bc.src_idx].push_back(std::move(og));
+        const size_t outgoing_idx = per_source_outgoing[bc.src_idx].size() - 1;
+        per_receiver_outgoing_refs_[bc.rcv_idx].push_back(
+            {bc.src_idx, outgoing_idx});
 
-        per_receiver_incoming[rcv_idx].push_back(pair_raw);
+        per_receiver_incoming[bc.rcv_idx].push_back(pair_raw);
     }
 
     // One SourceWorker per source modem; modems with no outgoing channels
@@ -193,8 +162,7 @@ ChannelEngine::ChannelEngine(const ScenarioConfig&         scenario,
             std::move(per_source_outgoing[i]));
     }
 
-    // One ReceiverMix per modem; a modem with no incoming channels emits
-    // silence + noise.
+    // One ReceiverMix per modem
     receiver_mixes_.reserve(modems_.size());
     for (size_t i = 0; i < modems_.size(); ++i) {
         receiver_mixes_.push_back(std::make_unique<ReceiverMix>(
@@ -299,7 +267,7 @@ void ChannelEngine::wire_modem_trackers(
     }
 
     // For every channel that feeds INTO this modem (it's the receiver),
-    // record its fill_tracker and rx_ring in the source-side Outgoing entry.
+    // record its fill_tracker and rx_ring in the source-side outgoing entry.
     for (const auto& ref : per_receiver_outgoing_refs_[modem_idx]) {
         if (ref.source_idx >= source_workers_.size()) continue;
         auto& sw = source_workers_[ref.source_idx];

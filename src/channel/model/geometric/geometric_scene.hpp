@@ -3,13 +3,10 @@
 #include <array>
 #include <cstddef>
 
+#include "channel/model/geometric/geometric_constants.hpp"
 #include "config/scenario.hpp"
-#include "core/constants.hpp"
 
 namespace openCREST {
-
-// kMaxImageOrder / MAX_GEOMETRIC_PATHS live in core/constants.hpp so the
-// config loader can validate max_bounces without depending on this layer.
 
 // One ray-path arrival in the method-of-images scene.
 struct PathTap {

@@ -1,4 +1,4 @@
-#include "channel/geometric_tap_source.hpp"
+#include "channel/model/geometric/geometric_tap_source.hpp"
 
 #include <algorithm>
 #include <array>

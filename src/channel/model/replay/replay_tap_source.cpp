@@ -1,4 +1,4 @@
-#include "channel/replay_tap_source.hpp"
+#include "channel/model/replay/replay_tap_source.hpp"
 
 #include <algorithm>
 #include <cmath>

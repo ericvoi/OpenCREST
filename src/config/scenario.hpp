@@ -45,11 +45,6 @@ struct ReplayConfig {
     // wrap to record time 0 instead of starting near the end. 0 = never
     // wrap (a message running past the end is truncated with a warning).
     double      wrap_if_remaining_lt_s = 0.0;
-
-    // Populated by ScenarioLoader from the .octt header (not parsed from
-    // YAML) so ChannelEngine sizing needs no file I/O.
-    double      max_delay_s           = 0.0;
-    uint32_t    tap_count             = 0;
 };
 
 struct GeometricSceneConfig {

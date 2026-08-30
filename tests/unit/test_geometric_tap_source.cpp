@@ -4,8 +4,8 @@
 #include <array>
 #include <cmath>
 
-#include "channel/geometric_scene.hpp"
-#include "channel/geometric_tap_source.hpp"
+#include "channel/model/geometric/geometric_scene.hpp"
+#include "channel/model/geometric/geometric_tap_source.hpp"
 #include "config/scenario.hpp"
 
 using openCREST::ChannelConfig;

@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
-#include "channel/replay_tap_source.hpp"
-#include "core/tap_trajectory.hpp"
+#include "channel/model/replay/replay_tap_source.hpp"
+#include "channel/model/replay/tap_trajectory.hpp"
 #include "config/scenario.hpp"
 #include "test_helpers/octt_writer.hpp"
 

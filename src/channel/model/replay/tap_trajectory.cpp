@@ -1,4 +1,4 @@
-#include "core/tap_trajectory.hpp"
+#include "channel/model/replay/tap_trajectory.hpp"
 
 #include <algorithm>
 #include <cmath>

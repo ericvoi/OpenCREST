@@ -1394,9 +1394,6 @@ TEST(ScenarioLoader, LoadReplayChannel) {
     EXPECT_DOUBLE_EQ(cc.replay.offset_s, 1.5);
     EXPECT_TRUE(cc.replay.advance_per_message);
     EXPECT_DOUBLE_EQ(cc.replay.wrap_if_remaining_lt_s, 5.0);
-    // Sizing fields lifted from the file header.
-    EXPECT_DOUBLE_EQ(cc.replay.max_delay_s, 0.010);
-    EXPECT_EQ(cc.replay.tap_count, 2u);
     EXPECT_TRUE(cc.multipath_taps.empty());
 }
 

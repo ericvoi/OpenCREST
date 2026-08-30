@@ -47,17 +47,25 @@ add_library(openCREST_core STATIC
     src/dsp/hilbert_filter.cpp
     src/dsp/source_delay_line.cpp
     src/dsp/per_tap_farrow.cpp
-    # Core
-    src/core/tap_trajectory.cpp
-    # Channel
+    # Channel — model-agnostic plumbing
     src/channel/pair_buffer.cpp
     src/channel/channel.cpp
-    src/channel/geometric_scene.cpp
-    src/channel/geometric_tap_source.cpp
-    src/channel/replay_tap_source.cpp
     src/channel/receiver_mix.cpp
     src/channel/source_worker.cpp
     src/channel/channel_engine.cpp
+    # Channel — rendering strategies
+    src/channel/renderer/static_renderer.cpp
+    src/channel/renderer/tap_source_renderer.cpp
+    # Channel — propagation models (one folder each; add a model by adding a
+    # folder plus one entry in model/channel_model.cpp)
+    src/channel/model/channel_model.cpp
+    src/channel/model/static/static_model.cpp
+    src/channel/model/geometric/geometric_model.cpp
+    src/channel/model/geometric/geometric_scene.cpp
+    src/channel/model/geometric/geometric_tap_source.cpp
+    src/channel/model/replay/replay_model.cpp
+    src/channel/model/replay/replay_tap_source.cpp
+    src/channel/model/replay/tap_trajectory.cpp
     # Protocol
     src/protocol/protocol_codec.cpp
     # Transport

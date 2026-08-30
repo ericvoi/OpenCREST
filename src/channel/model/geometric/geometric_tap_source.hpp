@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "channel/geometric_scene.hpp"
-#include "channel/tap_source.hpp"
+#include "channel/model/geometric/geometric_scene.hpp"
+#include "channel/model/tap_source.hpp"
 #include "config/scenario.hpp"
 
 namespace openCREST {

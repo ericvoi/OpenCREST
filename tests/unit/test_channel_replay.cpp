@@ -8,7 +8,7 @@
 
 #include "channel/channel.hpp"
 #include "channel/pair_buffer.hpp"
-#include "core/tap_trajectory.hpp"
+#include "channel/model/replay/tap_trajectory.hpp"
 #include "config/scenario.hpp"
 #include "core/types.hpp"
 #include "test_helpers/octt_writer.hpp"

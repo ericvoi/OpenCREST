@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <string>
 
-#include "channel/tap_source.hpp"
-#include "core/tap_trajectory.hpp"
+#include "channel/model/tap_source.hpp"
+#include "channel/model/replay/tap_trajectory.hpp"
 #include "config/scenario.hpp"
 
 namespace openCREST {

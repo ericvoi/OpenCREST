@@ -83,7 +83,7 @@ bool Simulator::discover_modems() {
 }
 
 bool Simulator::calibrate_modems() {
-    // Calibration runs inside discover_and_connect(); kept as a separate
+    // Calibration runs inside discover_and_connect(). Kept as a separate
     // step for clarity and future expansion (e.g., re-calibration).
     return true;
 }
@@ -91,7 +91,9 @@ bool Simulator::calibrate_modems() {
 bool Simulator::build_channel_engine() {
     buffers_.resize(modems_.size());
 
-    // Sample rate is shared across modems; take it from the first.
+    // Sample rate is shared across modems, take it from the first.
+    // TODO: update for scenarios with different modems. Requires moderate
+    // change to the engine
     const uint32_t sample_rate = modems_.empty()
         ? 500'000u
         : modems_[0]->calibration().adc_sampling_rate;
@@ -131,6 +133,8 @@ bool Simulator::build_channel_engine() {
     for (size_t i = 0; i < modems_.size(); ++i) {
         const auto& modem = modems_[i];
 
+        // Match modems by serial number.
+        // TODO: Generalize to other identification methods
         const ModemConfig* cfg = nullptr;
         for (const auto& mc : scenario_.modems) {
             if (mc.usb_serial == modem->id()) {

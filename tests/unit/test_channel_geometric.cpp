@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "channel/channel.hpp"
-#include "channel/geometric_scene.hpp"
+#include "channel/model/geometric/geometric_scene.hpp"
 #include "channel/pair_buffer.hpp"
 #include "config/scenario.hpp"
 #include "core/types.hpp"

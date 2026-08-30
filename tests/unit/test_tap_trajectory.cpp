@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "core/tap_trajectory.hpp"
+#include "channel/model/replay/tap_trajectory.hpp"
 
 using openCREST::TapTrajectory;
 using openCREST::TapTrajectoryError;

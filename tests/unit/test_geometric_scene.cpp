@@ -3,7 +3,7 @@
 #include <array>
 #include <cmath>
 
-#include "channel/geometric_scene.hpp"
+#include "channel/model/geometric/geometric_scene.hpp"
 #include "config/scenario.hpp"
 #include "dsp/path_loss.hpp"
 
